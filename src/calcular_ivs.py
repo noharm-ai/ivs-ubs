@@ -1031,10 +1031,12 @@ def gerar_mapa_interativo(resultado: pd.DataFrame,
         return
 
     log.info("Gerando mapa interativo...")
-    gdf = territorios.merge(resultado[["id_ubs", "ivs_saude", "no_ubs",
-                                       "score_D1", "score_D2", "score_D3",
-                                       "score_D4", "score_D5"]],
-                            on="id_ubs")
+    # resultado já contém no_ubs; drop da coluna duplicada do territorios antes do merge
+    terr_geo = territorios[["id_ubs", "geometry"]].copy()
+    gdf = terr_geo.merge(resultado[["id_ubs", "no_ubs", "ivs_saude",
+                                    "score_D1", "score_D2", "score_D3",
+                                    "score_D4", "score_D5"]],
+                         on="id_ubs")
     gdf = gdf.to_crs("EPSG:4326")
 
     centro = [gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()]
@@ -1090,7 +1092,8 @@ def gerar_mapa_estatico(resultado: pd.DataFrame,
                         territorios: gpd.GeoDataFrame) -> None:
     """Mapa estático em alta resolução para relatório."""
     log.info("Gerando mapa estático...")
-    gdf = territorios.merge(resultado[["id_ubs", "ivs_saude"]], on="id_ubs")
+    gdf = territorios[["id_ubs", "geometry"]].merge(
+        resultado[["id_ubs", "ivs_saude"]], on="id_ubs")
 
     fig, ax = plt.subplots(1, 1, figsize=(14, 14))
     ax.set_aspect("equal")

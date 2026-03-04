@@ -1,0 +1,17 @@
+﻿indicador,fonte,ano_referencia,pct_ubs_com_dado,pct_missing,metodo_imputacao
+D1_pbf,e-Gestor/MDS,demo,100.0,0.0,demo
+D1_analf,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D1_negros,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D1_obitos_viol,SIM/DataSUS,demo,100.0,0.0,demo
+D1_risco_amb,SMAMS/DGVS-POA,demo,100.0,0.0,demo
+D2_sem_saneam,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D2_sem_lixo,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D2_sem_esf,e-Gestor APS,demo,100.0,0.0,demo
+D2_evasao_em,Censo Escolar INEP,demo,100.0,0.0,demo
+D2_sem_creche,Censo Escolar INEP,demo,100.0,0.0,demo
+D3_entidades,MAPA OSC/IPEA,demo,100.0,0.0,demo
+D4_mae_adol,SINASC/DataSUS,demo,100.0,0.0,demo
+D5_menor1,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D5_adol,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D5_mif,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
+D5_idosos,Censo IBGE 2022 (demo),demo,100.0,0.0,demo
