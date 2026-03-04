@@ -1201,6 +1201,194 @@ def gerar_heatmap_dimensoes(resultado: pd.DataFrame) -> None:
 
 
 # ---------------------------------------------------------------------------
+# ETAPA 8 — Comparação com referência SMS-POA 2019
+# ---------------------------------------------------------------------------
+
+def _normalizar_nome(nome: str) -> str:
+    """Normaliza nome de UBS para comparação fuzzy.
+
+    Remove acentos, prefixos 'US'/'UBS'/'CS', pontuação e converte para
+    maiúsculas, permitindo match entre 'US Ilha do Pavão' e 'UBS ILHA DO PAVAO'.
+    """
+    import unicodedata, re
+    s = unicodedata.normalize("NFD", str(nome))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")  # remove diacríticos
+    s = s.upper()
+    s = re.sub(r"\b(UBS|US|CS|UNIDADE DE SAUDE|UNIDADE BASICA DE SAUDE)\b", "", s)
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def comparar_com_sms_2019(resultado: pd.DataFrame) -> None:
+    """Compara o IVS calculado com a referência SMS-POA 2019.
+
+    - Carrega data/reference/ivs_poa_sms_2019.json
+    - Faz matching fuzzy pelo nome normalizado (difflib)
+    - Salva tabela de match + gráficos de correlação
+    """
+    import difflib
+    from scipy.stats import spearmanr
+
+    ref_path = BASE / "data" / "reference" / "ivs_poa_sms_2019.json"
+    if not ref_path.exists():
+        log.warning("[ETAPA 8] Referência SMS 2019 não encontrada: %s", ref_path)
+        return
+
+    log.info("[ETAPA 8] Comparando com referência SMS-POA 2019...")
+
+    ref_raw = json.loads(ref_path.read_text(encoding="utf-8"))
+    ref = pd.DataFrame(ref_raw["unidades_saude"])
+    ref.columns = [c if c == "nome" else f"sms_{c}" for c in ref.columns]
+    ref["nome_norm"] = ref["nome"].apply(_normalizar_nome)
+
+    resultado = resultado.copy()
+    resultado["nome_norm"] = resultado["no_ubs"].apply(_normalizar_nome)
+
+    ref_nomes = ref["nome_norm"].tolist()
+
+    def _match(nome_norm: str) -> Optional[str]:
+        hits = difflib.get_close_matches(nome_norm, ref_nomes, n=1, cutoff=0.6)
+        return hits[0] if hits else None
+
+    resultado["nome_norm_match"] = resultado["nome_norm"].apply(_match)
+
+    merged = resultado.merge(
+        ref.rename(columns={"nome": "nome_sms_2019"}),
+        left_on="nome_norm_match",
+        right_on="nome_norm",
+        how="left",
+        suffixes=("", "_ref"),
+    )
+
+    n_total = len(resultado)
+    n_matched = merged["nome_sms_2019"].notna().sum()
+    log.info("  Matched: %d / %d UBS (%.0f%%)", n_matched, n_total,
+             100 * n_matched / n_total)
+
+    # ── Tabela de comparação ─────────────────────────────────────────────
+    cols_out = (
+        ["no_ubs", "nome_sms_2019", "ivs_saude", "sms_ivs",
+         "score_D1", "sms_d1", "score_D2", "sms_d2",
+         "score_D3", "sms_d3", "score_D4", "sms_d4",
+         "score_D5", "sms_d5"]
+    )
+    cols_out = [c for c in cols_out if c in merged.columns]
+    tab = merged[cols_out].rename(columns={
+        "ivs_saude": "ivs_calculado", "sms_ivs": "ivs_sms_2019",
+    })
+    tab.to_csv(OUT_TABLES / "comparacao_sms_2019.csv", index=False,
+               encoding="utf-8-sig")
+    log.info("  Tabela salva: outputs/tables/comparacao_sms_2019.csv")
+
+    # ── Correlações ──────────────────────────────────────────────────────
+    pares = [
+        ("ivs_saude",  "sms_ivs",  "IVS"),
+        ("score_D1",   "sms_d1",   "D1"),
+        ("score_D2",   "sms_d2",   "D2"),
+        ("score_D3",   "sms_d3",   "D3"),
+        ("score_D4",   "sms_d4",   "D4"),
+        ("score_D5",   "sms_d5",   "D5"),
+    ]
+    rows = []
+    for col_calc, col_sms, label in pares:
+        if col_calc not in merged.columns or col_sms not in merged.columns:
+            continue
+        sub = merged[[col_calc, col_sms]].dropna()
+        if len(sub) < 5:
+            continue
+        r, p = spearmanr(sub[col_calc], sub[col_sms])
+        sig = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "n.s."))
+        rows.append({"variavel": label, "n": len(sub), "spearman_r": round(r, 4),
+                     "p_value": round(p, 6), "sig": sig})
+        log.info("  Spearman %-4s r=%.4f  p=%.4f  %s  (n=%d)",
+                 label, r, p, sig, len(sub))
+
+    if rows:
+        pd.DataFrame(rows).to_csv(OUT_TABLES / "spearman_sms_2019.csv",
+                                  index=False, encoding="utf-8-sig")
+
+    # ── Gráficos ─────────────────────────────────────────────────────────
+    sub_ivs = merged[["ivs_saude", "sms_ivs", "no_ubs"]].dropna()
+    if len(sub_ivs) < 5:
+        log.warning("  Poucos pares para gráfico (n=%d). Pulando plots.", len(sub_ivs))
+        return
+
+    # Scatter IVS calculado × SMS 2019
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.scatter(sub_ivs["sms_ivs"], sub_ivs["ivs_saude"],
+               alpha=0.7, color="#2196F3", edgecolors="white", linewidths=0.5)
+    lim = (0, 1)
+    ax.plot(lim, lim, "k--", linewidth=0.8, alpha=0.5, label="y = x")
+    r_ivs = rows[0]["spearman_r"] if rows else float("nan")
+    ax.set_xlabel("IVS — SMS-POA 2019", fontsize=11)
+    ax.set_ylabel("IVS — Calculado", fontsize=11)
+    ax.set_title(f"IVS: Calculado vs SMS-POA 2019\nSpearman r = {r_ivs:.3f}  (n={len(sub_ivs)})",
+                 fontsize=12)
+    ax.set_xlim(lim); ax.set_ylim(lim)
+    # Anotar outliers (delta > 0.15)
+    for _, row in sub_ivs.iterrows():
+        if abs(row["ivs_saude"] - row["sms_ivs"]) > 0.15:
+            ax.annotate(row["no_ubs"], (row["sms_ivs"], row["ivs_saude"]),
+                        fontsize=6, alpha=0.7,
+                        xytext=(4, 4), textcoords="offset points")
+    fig.tight_layout()
+    fig.savefig(OUT_MAPS / "sms2019_scatter_ivs.png", dpi=150)
+    plt.close(fig)
+    log.info("  Gráfico: outputs/maps/sms2019_scatter_ivs.png")
+
+    # Scatter por dimensão (6 painéis)
+    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    axes = axes.flatten()
+    for i, (col_calc, col_sms, label) in enumerate(pares):
+        ax = axes[i]
+        sub = merged[[col_calc, col_sms]].dropna()
+        if len(sub) < 3:
+            ax.set_visible(False)
+            continue
+        ax.scatter(sub[col_sms], sub[col_calc],
+                   alpha=0.6, color="#FF5722", edgecolors="white", linewidths=0.4, s=30)
+        ax.plot([0, 1], [0, 1], "k--", linewidth=0.7, alpha=0.4)
+        r_row = next((x for x in rows if x["variavel"] == label), None)
+        r_val = r_row["spearman_r"] if r_row else float("nan")
+        sig_val = r_row["sig"] if r_row else ""
+        ax.set_title(f"{label}  r={r_val:.3f} {sig_val}  n={len(sub)}", fontsize=9)
+        ax.set_xlabel("SMS 2019", fontsize=8)
+        ax.set_ylabel("Calculado", fontsize=8)
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    fig.suptitle("Scatter por Dimensão — Calculado vs SMS-POA 2019", fontsize=12)
+    fig.tight_layout()
+    fig.savefig(OUT_MAPS / "sms2019_scatter_dimensoes.png", dpi=150)
+    plt.close(fig)
+    log.info("  Gráfico: outputs/maps/sms2019_scatter_dimensoes.png")
+
+    # Curva de ranking comparada
+    sub_rank = merged[["no_ubs", "ivs_saude", "sms_ivs"]].dropna().copy()
+    sub_rank = sub_rank.sort_values("ivs_saude", ascending=False).reset_index(drop=True)
+    sub_rank["delta"] = sub_rank["ivs_saude"] - sub_rank["sms_ivs"]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8),
+                                    gridspec_kw={"height_ratios": [3, 1]})
+    x = range(len(sub_rank))
+    ax1.plot(x, sub_rank["ivs_saude"], label="Calculado", color="#2196F3", linewidth=1.5)
+    ax1.plot(x, sub_rank["sms_ivs"],   label="SMS 2019",  color="#F44336",
+             linewidth=1.5, linestyle="--")
+    ax1.set_ylabel("IVS"); ax1.legend(); ax1.set_xlim(0, len(sub_rank) - 1)
+    ax1.set_title(f"Comparação IVS por Ranking — Calculado vs SMS-POA 2019\n"
+                  f"n={len(sub_rank)} UBS matched")
+    ax2.bar(x, sub_rank["delta"], color=["#F44336" if d > 0 else "#4CAF50"
+                                          for d in sub_rank["delta"]], width=1.0)
+    ax2.axhline(0, color="black", linewidth=0.8)
+    ax2.set_ylabel("Delta\n(calc − SMS)")
+    ax2.set_xlabel("UBS (ordenadas por IVS calculado)")
+    ax2.set_xlim(0, len(sub_rank) - 1)
+    fig.tight_layout()
+    fig.savefig(OUT_MAPS / "sms2019_rank_comparacao.png", dpi=150)
+    plt.close(fig)
+    log.info("  Gráfico: outputs/maps/sms2019_rank_comparacao.png")
+
+
+# ---------------------------------------------------------------------------
 # Pipeline principal
 # ---------------------------------------------------------------------------
 
@@ -1270,6 +1458,9 @@ def main(modo_demo: bool = False, usar_voronoi: bool = False) -> None:
     out_final = OUT_TABLES / "ivs_poa_resultado_final.csv"
     resultado.to_csv(out_final, index=False, encoding="utf-8-sig")
     log.info("Resultado final: %s", out_final)
+
+    # ── ETAPA 8: Comparação com SMS 2019 ─────────────────────────────────
+    comparar_com_sms_2019(resultado)
 
     # Resumo no console
     log.info("\n=== TOP 5 MAIS VULNERÁVEIS ===")
