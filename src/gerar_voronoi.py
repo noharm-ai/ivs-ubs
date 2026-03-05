@@ -159,7 +159,7 @@ def _resolve_limite_municipal(base_dir: Path, municipio_ibge: str, dest: Path, s
     return _download_limite_municipal(municipio_ibge, dest)
 
 
-def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str = "pelotas") -> dict:
+def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str = "municipio") -> dict:
     """
     Gera territórios Voronoi das UBS para o município configurado.
     """
@@ -257,11 +257,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Gera Voronoi das UBS por município")
     parser.add_argument(
         "--base-dir",
-        default=str(Path(__file__).resolve().parents[1] / "ivs_pelotas"),
+        default=str(Path(__file__).resolve().parents[1] / "ivs_municipio"),
         help="Diretório base do projeto (ex.: ivs_betim)",
     )
     parser.add_argument("--municipio", default="4314407", help="Código IBGE do município")
-    parser.add_argument("--slug", default="pelotas", help="Slug para nomes de arquivos")
+    parser.add_argument("--slug", default="municipio", help="Slug para nomes de arquivos")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")

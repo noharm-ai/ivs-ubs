@@ -95,24 +95,24 @@ def download_sinasc_municipio(
     return results
 
 
-def download_sinasc_pelotas(
+def download_sinasc_legacy(
     base_dir: Path,
     years: tuple[int, ...] = (2021, 2022, 2023),
     municipio: str = "4314407",
 ) -> list[dict]:
-    """Compatibilidade retroativa."""
+    """Compatibilidade retroativa para nomes antigos."""
     return download_sinasc_municipio(
         base_dir=base_dir,
         years=years,
         municipio=municipio,
         uf="RS",
-        file_prefix="nascidos_pelotas",
+        file_prefix="nascidos_municipio",
     )
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")
-    base = Path(__file__).resolve().parents[1] / "ivs_pelotas"
-    res = download_sinasc_municipio(base_dir=base, file_prefix="nascidos_pelotas")
+    base = Path(__file__).resolve().parents[1] / "ivs_municipio"
+    res = download_sinasc_municipio(base_dir=base, file_prefix="nascidos_municipio")
     for row in res:
         log.info("SINASC %s: %s (%s) - %s", row["year"], row["n_registros"], row["status"], row["arquivo"])

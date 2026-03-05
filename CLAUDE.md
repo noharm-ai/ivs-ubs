@@ -21,29 +21,29 @@ GitHub Pages: `index.html` na raiz → publicado em `noharm-ai.github.io/ivs-ubs
 ```
 ivs-ubs/
 ├── src/
-│   ├── calcular_ivs_pelotas.py     # pipeline principal: IBGE + OSM → ivs_pelotas.csv
-│   ├── gerar_pagina_pelotas.py     # gera index.html (Leaflet + tabela D1-D5)
+│   ├── calcular_ivs_municipio.py     # pipeline principal: IBGE + OSM → ivs_municipio.csv
+│   ├── gerar_pagina_municipio.py     # gera index.html (Leaflet + tabela D1-D5)
 │   ├── gerar_voronoi_ubs.py        # gera territorios_voronoi_ubs.geojson
 │   ├── download_shapefiles.py      # download automatizado (IBGE, CNES, SIM, etc.)
 │   ├── download_sinasc.py          # download SINASC via pysus
 │   └── download_sim.py             # download SIM via pysus
 │
-├── ivs_pelotas/
+├── ivs_municipio/
 │   ├── data/
 │   │   ├── raw/
 │   │   │   ├── ibge_universo/      # CSVs do Censo 2022 por setor censitário
-│   │   │   ├── ibge_setores/       # GeoJSON dos setores (setores_pelotas.geojson)
-│   │   │   ├── cnes/               # UBS geocodificadas (ubs_pelotas.json)
+│   │   │   ├── ibge_setores/       # GeoJSON dos setores (setores_municipio.geojson)
+│   │   │   ├── cnes/               # UBS geocodificadas (ubs_municipio.json)
 │   │   │   ├── esf/                # cobertura APS (xlsx municipal)
-│   │   │   ├── pbf/                # PBF agregado municipal (pbf_pelotas_202312.csv)
+│   │   │   ├── pbf/                # PBF agregado municipal (pbf_municipio_202312.csv)
 │   │   │   ├── sim/                # SIM parquet + CSV filtrado Pelotas
 │   │   │   ├── sinasc/             # SINASC parquet + CSV filtrado Pelotas
 │   │   │   ├── sinan/              # SINAN sífilis congênita
 │   │   │   ├── censo_escolar/      # matrículas por escola (Tabela_Matricula_2025.csv)
-│   │   │   └── osc_pelotas_osm.json  # 43 entidades OSM (community_centre etc.)
+│   │   │   └── osc_municipio_osm.json  # 43 entidades OSM (community_centre etc.)
 │   │   └── processed/
 │   │       ├── territorios_voronoi_ubs.geojson  # 55 polígonos Voronoi (EPSG:4674)
-│   │       ├── ivs_pelotas.csv                  # indicadores por UBS (55 linhas)
+│   │       ├── ivs_municipio.csv                  # indicadores por UBS (55 linhas)
 │   │       └── ibge_por_ubs.csv                 # totais IBGE brutos por UBS
 │   └── ...
 │
@@ -62,27 +62,27 @@ source .venv/bin/activate
 python src/gerar_voronoi_ubs.py
 
 # 2. Calcular indicadores (IBGE + OSM → CSV)
-python src/calcular_ivs_pelotas.py
+python src/calcular_ivs_municipio.py
 
 # 3. Gerar página HTML
-python src/gerar_pagina_pelotas.py
+python src/gerar_pagina_municipio.py
 ```
 
 ---
 
 ## Variáveis IBGE utilizadas (Censo 2022 — Agregados por Setores)
 
-### pelotas_basico.csv
+### municipio_basico.csv
 | Variável | Descrição |
 |----------|-----------|
 | `v0001` | Total de moradores do setor |
 
-### pelotas_domicilio.csv (dom1)
+### municipio_domicilio.csv (dom1)
 | Variável | Descrição |
 |----------|-----------|
 | `V00001` | Domicílios particulares permanentes ocupados (DPPO) |
 
-### pelotas_domicilio2.csv (dom2)
+### municipio_domicilio2.csv (dom2)
 | Variável | Descrição |
 |----------|-----------|
 | `V00309` | DPPO com esgotamento via rede geral ou pluvial |
@@ -90,13 +90,13 @@ python src/gerar_pagina_pelotas.py
 | `V00397` | DPPO com lixo coletado por serviço de limpeza |
 | `V00398` | DPPO com lixo depositado em caçamba de serviço de limpeza |
 
-### pelotas_alfabetizacao.csv
+### municipio_alfabetizacao.csv
 | Variável | Descrição |
 |----------|-----------|
 | `V00900` | Pessoas 15+ anos que sabem ler e escrever |
 | `V00901` | Pessoas 15+ anos que NÃO sabem ler e escrever |
 
-### pelotas_pessoa01.csv
+### municipio_pessoa01.csv
 | Variável | Descrição |
 |----------|-----------|
 | `V01006` | Total de moradores |
@@ -112,7 +112,7 @@ python src/gerar_pagina_pelotas.py
 | `V01040` | Total, 60-69 anos |
 | `V01041` | Total, 70+ anos |
 
-### pelotas_cor_raca.csv
+### municipio_cor_raca.csv
 | Variável | Descrição |
 |----------|-----------|
 | `V01318` | Pessoas de cor/raça preta |
@@ -201,23 +201,23 @@ IVS = (D1 × 0,20 + D2 × 0,20 + D3 × 0,20 + D4 × 0,20 + D5 × 0,20)
 ### Baixados e integrados ao IVS
 | Dado | Arquivo | Status |
 |------|---------|--------|
-| Setores censitários (geometria) | `ibge_setores/setores_pelotas.geojson` | ✅ Integrado |
+| Setores censitários (geometria) | `ibge_setores/setores_municipio.geojson` | ✅ Integrado |
 | Territórios Voronoi 55 UBS | `processed/territorios_voronoi_ubs.geojson` | ✅ Integrado |
-| IBGE domicílios 1 e 2 | `ibge_universo/pelotas_domicilio*.csv` | ✅ Integrado |
-| IBGE alfabetização | `ibge_universo/pelotas_alfabetizacao.csv` | ✅ Integrado |
-| IBGE pessoa01 (demografia) | `ibge_universo/pelotas_pessoa01.csv` | ✅ Integrado |
-| IBGE cor/raça | `ibge_universo/pelotas_cor_raca.csv` | ✅ Integrado |
-| Entidades OSM | `osc_pelotas_osm.json` | ✅ Integrado |
+| IBGE domicílios 1 e 2 | `ibge_universo/municipio_domicilio*.csv` | ✅ Integrado |
+| IBGE alfabetização | `ibge_universo/municipio_alfabetizacao.csv` | ✅ Integrado |
+| IBGE pessoa01 (demografia) | `ibge_universo/municipio_pessoa01.csv` | ✅ Integrado |
+| IBGE cor/raça | `ibge_universo/municipio_cor_raca.csv` | ✅ Integrado |
+| Entidades OSM | `osc_municipio_osm.json` | ✅ Integrado |
 
 ### Baixados, não integrados (limitações conhecidas)
 | Dado | Arquivo | Limitação | Potencial |
 |------|---------|-----------|-----------|
-| SINASC 2021-2022 | `sinasc/nascidos_pelotas_*.csv` | Sem CEP individual (privacidade DataSUS) | D4 calibrado |
-| SIM 2021-2023 | `sim/obitos_pelotas_*.csv` | Sem CEP individual | D1 mortes violentas |
-| PBF 202312 | `pbf/pbf_pelotas_202312.csv` | Apenas agregado municipal (4 linhas) | D1 renda |
+| SINASC 2021-2022 | `sinasc/nascidos_municipio_*.csv` | Sem CEP individual (privacidade DataSUS) | D4 calibrado |
+| SIM 2021-2023 | `sim/obitos_municipio_*.csv` | Sem CEP individual | D1 mortes violentas |
+| PBF 202312 | `pbf/pbf_municipio_202312.csv` | Apenas agregado municipal (4 linhas) | D1 renda |
 | Cobertura ESF | `esf/cobertura-aps-05-03-2026.xlsx` | Apenas nível municipal, sem CNES | D2 cobertura |
 | Censo Escolar 2025 | `censo_escolar/Tabela_Matricula_2025.csv` | Falta geocodificação das escolas | D2 evasão/creche |
-| SINAN sífilis | `sinan/sifilis_pelotas.csv` | Sem CEP | D4 |
+| SINAN sífilis | `sinan/sifilis_municipio.csv` | Sem CEP | D4 |
 
 ### Não baixados — fontes prioritárias
 | Dado | Fonte | Indicador alvo |

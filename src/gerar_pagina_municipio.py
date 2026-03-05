@@ -1,5 +1,5 @@
 """
-gerar_pagina_pelotas.py
+gerar_pagina_municipio.py
 =======================
 Gera index.html com mapa Leaflet interativo e tabela de indicadores
 para territórios de UBS do município configurado.
@@ -19,11 +19,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(
 log = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parents[1]
-DEFAULT_SLUG = "pelotas"
-DEFAULT_CIDADE = "Pelotas"
-PROC = BASE / "ivs_pelotas" / "data" / "processed"
+DEFAULT_SLUG = "municipio"
+DEFAULT_CIDADE = "Municipio"
+PROC = BASE / "ivs_municipio" / "data" / "processed"
 OUT_HTML = BASE / "index.html"
-IVS_FILE = PROC / "ivs_pelotas.csv"
+IVS_FILE = PROC / "ivs_municipio.csv"
 NOME_CIDADE = DEFAULT_CIDADE
 
 # ---------------------------------------------------------------------------
@@ -409,7 +409,7 @@ def main():
     parser = argparse.ArgumentParser(description="Gera página IVSaúde por município")
     parser.add_argument(
         "--base-dir",
-        default=str(Path(__file__).resolve().parents[1] / "ivs_pelotas"),
+        default=str(Path(__file__).resolve().parents[1] / "ivs_municipio"),
         help="Diretório base de dados (ex.: ivs_betim)",
     )
     parser.add_argument("--slug", default=DEFAULT_SLUG, help="Slug do município (ex.: betim)")
@@ -426,8 +426,8 @@ def main():
 
     log.info("Carregando dados...")
     if not IVS_FILE.exists():
-        legacy = PROC / "ivs_pelotas.csv"
-        ivs_file = legacy if legacy.exists() else IVS_FILE
+        legacy_candidates = [PROC / "ivs_municipio.csv"]
+        ivs_file = next((p for p in legacy_candidates if p.exists()), IVS_FILE)
     else:
         ivs_file = IVS_FILE
     df = pd.read_csv(ivs_file, dtype={"id_ubs": str})

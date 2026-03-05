@@ -12,10 +12,10 @@ Referência conceitual: Dahlgren & Whitehead (1991).
 ```
 ivs-ubs/
 ├── src/
-│   ├── download_*.py                # download e preparação das fontes
+│   ├── download_municipio.py        # download e preparação das fontes
 │   ├── gerar_voronoi.py             # geração de territórios Voronoi
-│   ├── calcular_ivs_*.py            # cálculo dos indicadores D1-D5
-│   └── gerar_pagina_*.py            # geração de index.html (mapa + tabela)
+│   ├── calcular_ivs_municipio.py    # cálculo dos indicadores D1-D5
+│   └── gerar_pagina_municipio.py    # geração de index.html (mapa + tabela)
 ├── <base_dir>/
 │   ├── data/raw/                    # dados brutos
 │   └── data/processed/              # dados processados e resultados
@@ -39,13 +39,13 @@ pip install -r requirements.txt
 ### 1. Baixar e preparar dados
 
 ```bash
-python src/download_<pipeline>.py
+python src/download_municipio.py
 ```
 
 Executar apenas uma etapa:
 
 ```bash
-python src/download_<pipeline>.py --only ibge
+python src/download_municipio.py --only ibge
 ```
 
 Opções disponíveis em `--only`:
@@ -54,16 +54,14 @@ Opções disponíveis em `--only`:
 ### 2. Calcular indicadores por território
 
 ```bash
-python src/calcular_ivs_<pipeline>.py
+python src/calcular_ivs_municipio.py
 ```
 
 ### 3. Gerar página HTML final
 
 ```bash
-python src/gerar_pagina_<pipeline>.py
+python src/gerar_pagina_municipio.py
 ```
-
-Substitua `<pipeline>` pelo sufixo disponível no diretório `src/`.
 
 ---
 

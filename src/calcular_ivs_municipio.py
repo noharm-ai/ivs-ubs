@@ -1,5 +1,5 @@
 """
-calcular_ivs_pelotas.py
+calcular_ivs_municipio.py
 =======================
 Agrega dados do Censo IBGE 2022 (por setor censitário) para territórios
 Voronoi de UBS do município configurado.
@@ -30,8 +30,8 @@ log = logging.getLogger(__name__)
 # Caminhos
 # ---------------------------------------------------------------------------
 
-DEFAULT_BASE = Path(__file__).resolve().parents[1] / "ivs_pelotas"
-DEFAULT_SLUG = "pelotas"
+DEFAULT_BASE = Path(__file__).resolve().parents[1] / "ivs_municipio"
+DEFAULT_SLUG = "municipio"
 
 BASE = DEFAULT_BASE
 RAW = BASE / "data" / "raw"
@@ -39,10 +39,10 @@ PROC = BASE / "data" / "processed"
 PROC.mkdir(parents=True, exist_ok=True)
 
 IBGE_DIR = RAW / "ibge_universo"
-SETOR_GEO = RAW / "ibge_setores" / "setores_pelotas.geojson"
+SETOR_GEO = RAW / "ibge_setores" / "setores_municipio.geojson"
 VORONOI = PROC / "territorios_voronoi_ubs.geojson"
-OSC_FILE = RAW / "osc_pelotas_osm.json"
-IVS_OUT_NAME = "ivs_pelotas.csv"
+OSC_FILE = RAW / "osc_municipio_osm.json"
+IVS_OUT_NAME = "ivs_municipio.csv"
 
 CRS_GEO = "EPSG:4674"
 CRS_UTM = "EPSG:32722"   # UTM 22S — cálculo de áreas
@@ -163,7 +163,7 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     setor_geo = _resolve_existing_file(
         [
             SETOR_GEO,
-            RAW / "ibge_setores" / "setores_pelotas.geojson",
+            RAW / "ibge_setores" / "setores_municipio.geojson",
             RAW / "ibge_setores" / "setores.geojson",
         ],
         "GeoJSON de setores",
@@ -196,7 +196,7 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     basico_path = _resolve_existing_file(
         [
             IBGE_DIR / f"{slug}_basico.csv",
-            IBGE_DIR / "pelotas_basico.csv",
+            IBGE_DIR / "municipio_basico.csv",
             IBGE_DIR / "basico.csv",
         ],
         "IBGE basico",
@@ -204,7 +204,7 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     dom1_path = _resolve_existing_file(
         [
             IBGE_DIR / f"{slug}_domicilio.csv",
-            IBGE_DIR / "pelotas_domicilio.csv",
+            IBGE_DIR / "municipio_domicilio.csv",
             IBGE_DIR / "domicilio.csv",
         ],
         "IBGE domicilio",
@@ -212,7 +212,7 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     pessoa01_path = _resolve_existing_file(
         [
             IBGE_DIR / f"{slug}_pessoa01.csv",
-            IBGE_DIR / "pelotas_pessoa01.csv",
+            IBGE_DIR / "municipio_pessoa01.csv",
             IBGE_DIR / "pessoa01.csv",
         ],
         "IBGE pessoa01",
@@ -221,8 +221,8 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
         [
             IBGE_DIR / f"{slug}_alfabetizacao.csv",
             IBGE_DIR / f"{slug}_pessoa02.csv",
-            IBGE_DIR / "pelotas_alfabetizacao.csv",
-            IBGE_DIR / "pelotas_pessoa02.csv",
+            IBGE_DIR / "municipio_alfabetizacao.csv",
+            IBGE_DIR / "municipio_pessoa02.csv",
             IBGE_DIR / "alfabetizacao.csv",
             IBGE_DIR / "pessoa02.csv",
         ]
@@ -230,14 +230,14 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     dom2_path = _resolve_optional_file(
         [
             IBGE_DIR / f"{slug}_domicilio2.csv",
-            IBGE_DIR / "pelotas_domicilio2.csv",
+            IBGE_DIR / "municipio_domicilio2.csv",
             IBGE_DIR / "domicilio2.csv",
         ]
     )
     cor_path = _resolve_optional_file(
         [
             IBGE_DIR / f"{slug}_cor_raca.csv",
-            IBGE_DIR / "pelotas_cor_raca.csv",
+            IBGE_DIR / "municipio_cor_raca.csv",
             IBGE_DIR / "cor_raca.csv",
         ]
     )
@@ -324,7 +324,7 @@ def contar_osc_por_territorio(territorios: gpd.GeoDataFrame) -> pd.Series:
     Conta entidades comunitárias (OpenStreetMap) por território Voronoi.
     Retorna Series indexada por id_ubs com contagem de OSC.
     """
-    osc_path = OSC_FILE if OSC_FILE.exists() else RAW / "osc_pelotas_osm.json"
+    osc_path = OSC_FILE if OSC_FILE.exists() else RAW / "osc_municipio_osm.json"
     if not osc_path.exists():
         log.warning("OSC JSON não encontrado (%s) — D3 será neutro (0 OSC)", OSC_FILE.name)
         return pd.Series(0.0, index=territorios.set_index("id_ubs").index)

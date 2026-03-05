@@ -95,24 +95,24 @@ def download_sim_municipio(
     return results
 
 
-def download_sim_pelotas(
+def download_sim_legacy(
     base_dir: Path,
     years: tuple[int, ...] = (2021, 2022, 2023),
     municipio: str = "4314407",
 ) -> list[dict]:
-    """Compatibilidade retroativa."""
+    """Compatibilidade retroativa para nomes antigos."""
     return download_sim_municipio(
         base_dir=base_dir,
         years=years,
         municipio=municipio,
         uf="RS",
-        file_prefix="obitos_pelotas",
+        file_prefix="obitos_municipio",
     )
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")
-    base = Path(__file__).resolve().parents[1] / "ivs_pelotas"
-    res = download_sim_municipio(base_dir=base, file_prefix="obitos_pelotas")
+    base = Path(__file__).resolve().parents[1] / "ivs_municipio"
+    res = download_sim_municipio(base_dir=base, file_prefix="obitos_municipio")
     for row in res:
         log.info("SIM %s: %s (%s) - %s", row["year"], row["n_registros"], row["status"], row["arquivo"])
