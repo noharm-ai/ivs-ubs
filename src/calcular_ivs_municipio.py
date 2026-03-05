@@ -42,6 +42,8 @@ IBGE_DIR = RAW / "ibge_universo"
 SETOR_GEO = RAW / "ibge_setores" / "setores_municipio.geojson"
 VORONOI = PROC / "territorios_voronoi_ubs.geojson"
 OSC_FILE = RAW / "osc_municipio_osm.json"
+ESCOLA_FILE: Path | None = None  # set by _configure_runtime
+CNPJ_FILE: Path | None = None    # set by _configure_runtime (geocoded)
 IVS_OUT_NAME = "ivs_municipio.csv"
 
 CRS_GEO = "EPSG:4674"
@@ -93,13 +95,13 @@ DOM2_COLS  = ["CD_setor", "V00309", "V00310", "V00397", "V00398"]
 ALFA_COLS  = ["CD_setor", "V00900", "V00901"]
 PES_COLS   = ["CD_setor", "V01006",
               "V01022", "V01023", "V01024", "V01025", "V01026", "V01027",
-              "V01031", "V01033", "V01034", "V01040", "V01041"]
+              "V01031", "V01032", "V01033", "V01034", "V01040", "V01041"]
 COR_COLS   = ["CD_setor", "V01318", "V01320"]  # preta + parda
 BAS_COLS   = ["CD_SETOR", "v0001"]
 
 
 def _configure_runtime(base_dir: Path, slug: str) -> None:
-    global BASE, RAW, PROC, IBGE_DIR, SETOR_GEO, VORONOI, OSC_FILE, IVS_OUT_NAME
+    global BASE, RAW, PROC, IBGE_DIR, SETOR_GEO, VORONOI, OSC_FILE, ESCOLA_FILE, CNPJ_FILE, IVS_OUT_NAME
     BASE = base_dir.resolve()
     RAW = BASE / "data" / "raw"
     PROC = BASE / "data" / "processed"
@@ -108,6 +110,8 @@ def _configure_runtime(base_dir: Path, slug: str) -> None:
     SETOR_GEO = RAW / "ibge_setores" / f"setores_{slug}.geojson"
     VORONOI = PROC / "territorios_voronoi_ubs.geojson"
     OSC_FILE = RAW / f"osc_{slug}_osm.json"
+    ESCOLA_FILE = RAW / "censo_escolar" / f"{slug}_escolas_geo.csv"
+    CNPJ_FILE = RAW / "cnpj" / f"{slug}_cnpj_osc_geo.csv"
     IVS_OUT_NAME = f"ivs_{slug}.csv"
 
 
@@ -312,7 +316,7 @@ def agregar_por_voronoi(
             log.debug("  coluna %s não encontrada na interseção", col)
             continue
         inter[f"_w_{col}"] = pd.to_numeric(inter[col], errors="coerce") * inter["_frac"]
-        resultado[col] = inter.groupby("id_ubs")[f"_w_{col}"].sum()
+        resultado[col] = inter.groupby("id_ubs")[f"_w_{col}"].sum(min_count=1)
 
     df_res = pd.DataFrame(resultado)
     log.info("  Resultado: %d territórios × %d colunas", len(df_res), len(df_res.columns))
@@ -349,6 +353,103 @@ def contar_osc_por_territorio(territorios: gpd.GeoDataFrame) -> pd.Series:
     result = counts.reindex(all_ids).fillna(0)
     log.info("  D3 — %d entidades OSM distribuídas em %d territórios", len(records), (result > 0).sum())
     return result
+
+
+def carregar_escola_por_territorio(territorios: gpd.GeoDataFrame) -> pd.DataFrame:
+    """
+    Carrega escolas geocodificadas e soma matrículas por território Voronoi.
+    Retorna DataFrame indexado por id_ubs com colunas:
+      n_escolas, QT_MAT_INF_CRE, QT_MAT_INF_PRE, QT_MAT_FUND_AI, QT_MAT_FUND_AF
+    """
+    escola_path = ESCOLA_FILE if (ESCOLA_FILE and ESCOLA_FILE.exists()) else None
+    mat_cols = ["QT_MAT_INF_CRE", "QT_MAT_INF_PRE", "QT_MAT_FUND_AI", "QT_MAT_FUND_AF"]
+    zero_result = pd.DataFrame(0.0, index=territorios["id_ubs"], columns=["n_escolas"] + mat_cols)
+
+    if escola_path is None:
+        log.warning("Escolas geocodificadas não encontradas (%s) — D2 escola será zero", ESCOLA_FILE)
+        return zero_result
+
+    try:
+        df = pd.read_csv(escola_path, dtype=str)
+        if df.empty or "LATITUDE" not in df.columns or "LONGITUDE" not in df.columns:
+            log.warning("  escolas_geo.csv vazio ou sem coordenadas — D2 escola será zero")
+            return zero_result
+
+        df["LATITUDE"] = pd.to_numeric(df["LATITUDE"].str.replace(",", "."), errors="coerce")
+        df["LONGITUDE"] = pd.to_numeric(df["LONGITUDE"].str.replace(",", "."), errors="coerce")
+        df = df.dropna(subset=["LATITUDE", "LONGITUDE"])
+
+        if df.empty:
+            log.warning("  nenhuma escola com coordenadas válidas — D2 escola será zero")
+            return zero_result
+
+        for c in mat_cols:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+            else:
+                df[c] = 0.0
+
+        escola_gdf = gpd.GeoDataFrame(
+            df,
+            geometry=gpd.points_from_xy(df["LONGITUDE"], df["LATITUDE"]),
+            crs="EPSG:4326",
+        ).to_crs(CRS_UTM)
+
+        t_utm = territorios.to_crs(CRS_UTM)[["id_ubs", "geometry"]]
+        joined = gpd.sjoin(escola_gdf, t_utm, how="left", predicate="within")
+
+        agg_cols = {c: "sum" for c in mat_cols}
+        agg_cols["geometry"] = "count"
+        result = joined.groupby("id_ubs").agg(agg_cols).rename(columns={"geometry": "n_escolas"})
+        result = result.reindex(territorios["id_ubs"]).fillna(0)
+
+        n_com_escola = (result["n_escolas"] > 0).sum()
+        log.info("  D2 escola — %d escolas geocodificadas; %d territórios com ao menos 1 escola",
+                 len(df), n_com_escola)
+        return result
+    except Exception as e:  # noqa: BLE001
+        log.warning("  erro ao carregar escolas: %s — D2 escola será zero", e)
+        return zero_result
+
+
+def contar_cnpj_osc_por_territorio(territorios: gpd.GeoDataFrame) -> pd.Series:
+    """
+    Conta entidades OSC do CNPJ (com CEPs geocodificados) por território Voronoi.
+    Requer arquivo `{slug}_cnpj_osc_geo.csv` com colunas LATITUDE e LONGITUDE.
+    Retorna Series indexada por id_ubs.
+    """
+    cnpj_path = CNPJ_FILE if (CNPJ_FILE and CNPJ_FILE.exists()) else None
+    zero = pd.Series(0.0, index=territorios["id_ubs"])
+
+    if cnpj_path is None:
+        log.info("  CNPJ geocodificado não encontrado — D3 usará apenas OSM")
+        return zero
+
+    try:
+        df = pd.read_csv(cnpj_path, dtype=str)
+        if df.empty or "LATITUDE" not in df.columns or "LONGITUDE" not in df.columns:
+            log.info("  CNPJ geo vazio ou sem coordenadas — D3 usará apenas OSM")
+            return zero
+
+        df["LATITUDE"] = pd.to_numeric(df["LATITUDE"].str.replace(",", "."), errors="coerce")
+        df["LONGITUDE"] = pd.to_numeric(df["LONGITUDE"].str.replace(",", "."), errors="coerce")
+        df = df.dropna(subset=["LATITUDE", "LONGITUDE"])
+
+        cnpj_gdf = gpd.GeoDataFrame(
+            df,
+            geometry=gpd.points_from_xy(df["LONGITUDE"], df["LATITUDE"]),
+            crs="EPSG:4326",
+        ).to_crs(CRS_UTM)
+
+        t_utm = territorios.to_crs(CRS_UTM)[["id_ubs", "geometry"]]
+        joined = gpd.sjoin(cnpj_gdf, t_utm, how="left", predicate="within")
+        counts = joined.groupby("id_ubs").size().reindex(territorios["id_ubs"]).fillna(0)
+
+        log.info("  D3 CNPJ — %d OSCs geocodificadas em %d territórios", len(df), (counts > 0).sum())
+        return counts
+    except Exception as e:  # noqa: BLE001
+        log.warning("  erro ao carregar CNPJ geo: %s — D3 usará apenas OSM", e)
+        return zero
 
 
 def calcular_indicadores(agg: pd.DataFrame) -> pd.DataFrame:
@@ -390,6 +491,7 @@ def calcular_indicadores(agg: pd.DataFrame) -> pd.DataFrame:
     )
 
     # D5 — Crianças < 1 ano: proxy = (0-4 anos) / 5 / total pop
+    # V01032 = total 5-9 anos (também carregado para cálculo de D2_fora_fund)
     ind["D5_menor1"] = (col("V01031") / 5) / col("V01006").replace(0, np.nan) * 100
 
     # D5 — Adolescentes (10-19 anos)
@@ -470,7 +572,7 @@ def main():
         "V00900", "V00901",
         "V01006",
         "V01022", "V01023", "V01024", "V01025", "V01026", "V01027",
-        "V01031", "V01033", "V01034", "V01040", "V01041",
+        "V01031", "V01032", "V01033", "V01034", "V01040", "V01041",
         "V01318", "V01320",
     ]
     cols_presentes = [c for c in cols_numericas if c in setores.columns]
@@ -484,11 +586,39 @@ def main():
     log.info("Calculando indicadores por UBS...")
     ind = calcular_indicadores(agg)
 
-    # D3 — Entidades comunitárias OSM (contagem por território)
-    log.info("Calculando D3 (entidades comunitárias OSM)...")
-    osc_counts = contar_osc_por_territorio(territorios_com_id)
+    # D2 — Indicadores de cobertura escolar (Censo Escolar INEP)
+    log.info("Calculando D2 escola (cobertura creche e fundamental)...")
+    escola_agg = carregar_escola_por_territorio(territorios_com_id)
     pop_ubs = ind["pop_total"].replace(0, np.nan)
-    ind["D3_osc_per1k"] = (osc_counts.reindex(ind.index).fillna(0) / pop_ubs * 1000)
+    escola_disponivel = escola_agg["n_escolas"].sum() > 0
+    # D2_fora_creche: % crianças 0-3 sem vaga em creche (proxy: V01031/5 × 4 = 0-3 anos)
+    if escola_disponivel:
+        pop_0_3 = (agg["V01031"].reindex(ind.index) / 5 * 4).clip(lower=0).replace(0, np.nan) if "V01031" in agg.columns else pd.Series(np.nan, index=ind.index)
+        vagas_creche = escola_agg["QT_MAT_INF_CRE"].reindex(ind.index).fillna(0)
+        ind["D2_fora_creche"] = ((pop_0_3 - vagas_creche).clip(lower=0) / pop_0_3 * 100).clip(upper=100)
+        # D2_fora_fund: % crianças 5-14 sem vaga no fundamental (V01032=5-9, V01033=10-14)
+        pop_5_14 = (
+            (agg["V01032"].reindex(ind.index) if "V01032" in agg.columns else pd.Series(0.0, index=ind.index))
+            + (agg["V01033"].reindex(ind.index) if "V01033" in agg.columns else pd.Series(0.0, index=ind.index))
+        ).clip(lower=0).replace(0, np.nan)
+        vagas_fund = (
+            escola_agg["QT_MAT_FUND_AI"].reindex(ind.index).fillna(0)
+            + escola_agg["QT_MAT_FUND_AF"].reindex(ind.index).fillna(0)
+        )
+        ind["D2_fora_fund"] = ((pop_5_14 - vagas_fund).clip(lower=0) / pop_5_14 * 100).clip(upper=100)
+    else:
+        log.warning("  nenhuma escola mapeada nos territórios — D2_fora_creche e D2_fora_fund serão NaN")
+        ind["D2_fora_creche"] = np.nan
+        ind["D2_fora_fund"] = np.nan
+
+    # D3 — Entidades comunitárias: OSM + CNPJ geocodificado
+    log.info("Calculando D3 (entidades comunitárias OSM + CNPJ)...")
+    osc_osm = contar_osc_por_territorio(territorios_com_id).reindex(ind.index).fillna(0)
+    osc_cnpj = contar_cnpj_osc_por_territorio(territorios_com_id).reindex(ind.index).fillna(0)
+    osc_total = osc_osm + osc_cnpj
+    ind["D3_osc_per1k"] = (osc_total / pop_ubs * 1000)
+    ind["D3_osc_osm"] = osc_osm
+    ind["D3_osc_cnpj"] = osc_cnpj
 
     # Adicionar metadados
     meta = territorios.set_index("id_ubs")[["no_ubs"]].copy()

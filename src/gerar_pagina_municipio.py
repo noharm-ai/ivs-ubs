@@ -35,22 +35,24 @@ NOME_CIDADE = DEFAULT_CIDADE
 # D5 (20%): perfil demográfico — Censo IBGE 2022
 # ---------------------------------------------------------------------------
 INDICADORES = {
-    "D1_analf":      ("D1", "Analfabetismo 15+",                  "%"),
-    "D1_negros":     ("D1", "Pop. preta+parda",                   "%"),
-    "D2_sem_saneam": ("D2", "Sem saneamento adequado",             "%"),
-    "D2_sem_lixo":   ("D2", "Sem coleta de lixo",                 "%"),
-    "D3_osc_per1k":  ("D3", "Entidades comunitárias / 1.000 hab", "#"),
-    "D4_adol_fem":   ("D4", "Adolescentes femininas 10-19",       "%"),
-    "D5_menor1":     ("D5", "Crianças <1 ano (proxy 0-4/5)",      "%"),
-    "D5_adol":       ("D5", "Adolescentes 10-19 anos",            "%"),
-    "D5_mif":        ("D5", "Mulheres 10-49 anos",                "%"),
-    "D5_idosos":     ("D5", "Idosos 60+ anos",                    "%"),
+    "D1_analf":       ("D1", "Analfabetismo 15+",                  "%"),
+    "D1_negros":      ("D1", "Pop. preta+parda",                   "%"),
+    "D2_sem_saneam":  ("D2", "Sem saneamento adequado",             "%"),
+    "D2_sem_lixo":    ("D2", "Sem coleta de lixo",                 "%"),
+    "D2_fora_creche": ("D2", "Crianças 0-3 fora da creche",        "%"),
+    "D2_fora_fund":   ("D2", "Crianças 5-14 fora do fundamental",  "%"),
+    "D3_osc_per1k":   ("D3", "Entidades comunitárias / 1.000 hab", "#"),
+    "D4_adol_fem":    ("D4", "Adolescentes femininas 10-19",       "%"),
+    "D5_menor1":      ("D5", "Crianças <1 ano (proxy 0-4/5)",      "%"),
+    "D5_adol":        ("D5", "Adolescentes 10-19 anos",            "%"),
+    "D5_mif":         ("D5", "Mulheres 10-49 anos",                "%"),
+    "D5_idosos":      ("D5", "Idosos 60+ anos",                    "%"),
 }
 
 # Indicadores onde valor MAIOR = MENOS vulnerável (inverter na normalização)
 INDICADORES_INVERSOS = {"D3_osc_per1k"}
 
-DIM_PESOS = {"D1": 0.20, "D2": 0.20, "D3": 0.20, "D4": 0.20, "D5": 0.20}
+DIM_PESOS = {"D1": 0.50, "D2": 0.30, "D3": 0.10, "D4": 0.08, "D5": 0.02}
 
 # Cores do gradiente de vulnerabilidade (verde → amarelo → laranja → vermelho)
 CORES_IVS = [
@@ -263,7 +265,7 @@ footer a{{color:#2980b9;text-decoration:none}}
   <p class="sub">Dados IBGE Censo 2022 · Metodologia Determinantes Sociais da Saúde (Dahlgren &amp; Whitehead, 1991)</p>
   <div class="badges">
     <span class="badge">{n_ubs} UBS</span>
-    <span class="badge">10 Indicadores</span>
+    <span class="badge">{len(INDICADORES)} Indicadores</span>
     <span class="badge">Territórios Voronoi</span>
     <span class="badge">Censo 2022 + OpenStreetMap</span>
     <span class="badge">⚠ IVS Parcial — 5 dimensões</span>
@@ -316,7 +318,7 @@ footer a{{color:#2980b9;text-decoration:none}}
           <th title="D3 — Capital Social (entidades comunitárias OSM por 1.000 hab)">D3 <span style="font-weight:400;opacity:.7;font-size:.85em">Capital Social</span></th>
           <th title="D4 — Saúde Adolescente (% femininas 10-19 anos, proxy mães adolescentes)">D4 <span style="font-weight:400;opacity:.7;font-size:.85em">Saúde Adol.</span></th>
           <th title="D5 — Perfil Demográfico (faixas etárias)">D5 <span style="font-weight:400;opacity:.7;font-size:.85em">Demográfico</span></th>
-          <th title="IVS Parcial — média ponderada D1+D2+D3+D4+D5 (20% cada)">IVS Parcial</th>
+          <th title="IVS Parcial — D1×50% + D2×30% + D3×10% + D4×8% + D5×2%">IVS Parcial</th>
           <th>Classe</th>
         </tr>
       </thead>
@@ -328,16 +330,16 @@ footer a{{color:#2980b9;text-decoration:none}}
 
   <div class="section-title">Metodologia</div>
   <div class="method">
-    <p><strong>IVS Parcial</strong> — calculado com 10 indicadores, agrupados em 5 dimensões com peso igual (20% cada):</p>
+    <p><strong>IVS Parcial</strong> — calculado com {len(INDICADORES)} indicadores, agrupados em 5 dimensões com pesos diferenciados (D1=50%, D2=30%, D3=10%, D4=8%, D5=2%):</p>
     <ul>
       <li><strong>D1 — Condição Socioeconômica:</strong> % analfabetismo 15+, % população preta+parda <em>(Censo IBGE 2022)</em></li>
-      <li><strong>D2 — Habitação e Saneamento:</strong> % domicílios sem saneamento adequado, % sem coleta de lixo <em>(Censo IBGE 2022)</em></li>
+      <li><strong>D2 — Habitação e Saneamento:</strong> % domicílios sem saneamento adequado, % sem coleta de lixo, % crianças 0-3 fora da creche, % crianças 5-14 fora do fundamental <em>(Censo IBGE 2022 + Censo Escolar INEP)</em></li>
       <li><strong>D3 — Capital Social:</strong> entidades comunitárias por 1.000 hab (INVERSO: mais = menos vulnerável) <em>(OpenStreetMap 2025)</em></li>
-      <li><strong>D4 — Saúde do Adolescente:</strong> % femininas 10-19 anos (proxy de risco para maternidade adolescente, SINASC sem geocódigo) <em>(Censo IBGE 2022)</em></li>
+      <li><strong>D4 — Saúde do Adolescente:</strong> % femininas 10-19 anos (proxy de risco para maternidade adolescente) <em>(Censo IBGE 2022)</em></li>
       <li><strong>D5 — Perfil Demográfico:</strong> % crianças &lt;1 ano (proxy 0-4/5), % adolescentes 10-19, % mulheres 10-49, % idosos 60+ <em>(Censo IBGE 2022)</em></li>
     </ul>
-    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro do município. D3 é invertido (maior densidade de OSC = menor vulnerabilidade). Territórios definidos por diagrama de Voronoi a partir dos pontos CNES. Fonte: IBGE Censo Demográfico 2022 — Agregados por Setores Censitários; OpenStreetMap via Overpass API.</p>
-    <p style="margin-top:8px;color:#888;font-size:.85em">Indicadores ausentes desta versão (fontes pendentes): Bolsa Família, óbitos por causas violentas, cobertura ESF, evasão escolar.</p>
+    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro do município. D3 é invertido (maior densidade de OSC = menor vulnerabilidade). Territórios definidos por diagrama de Voronoi a partir dos pontos CNES. Fontes: IBGE Censo Demográfico 2022; Censo Escolar INEP 2025; OpenStreetMap via Overpass API.</p>
+    <p style="margin-top:8px;color:#888;font-size:.85em">Indicadores ausentes desta versão (fontes pendentes): Bolsa Família, óbitos por causas violentas, cobertura ESF por CNES.</p>
   </div>
 
 </div>
