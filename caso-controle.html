@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estudo Caso-Controle — IVSaúde UBS</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f0f2f5; color: #2c3e50; font-size: 14px; }
+
+.header { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
+           color: #fff; padding: 28px 40px; }
+.header h1 { font-size: 1.6em; margin-bottom: 5px; }
+.header p { opacity: .8; font-size: .9em; }
+
+.layout { display: flex; gap: 0; min-height: calc(100vh - 120px); }
+
+/* ── Painel de controle ── */
+.sidebar { width: 300px; flex-shrink: 0; background: #fff;
+            border-right: 1px solid #dde3ea;
+            padding: 20px 18px; overflow-y: auto; }
+.sidebar h2 { font-size: .9em; font-weight: 700; color: #1a5276;
+               text-transform: uppercase; letter-spacing: .05em;
+               border-left: 3px solid #2980b9; padding-left: 8px;
+               margin: 20px 0 12px; }
+.sidebar h2:first-child { margin-top: 0; }
+
+.control-group { margin-bottom: 14px; }
+.control-group label { display: block; font-size: .8em; color: #555;
+                         margin-bottom: 4px; font-weight: 600; }
+.control-group input[type=range] { width: 100%; accent-color: #2980b9; }
+.control-group .range-val { font-size: .85em; color: #2980b9; font-weight: 700;
+                              text-align: right; margin-top: 2px; }
+.control-group select, .control-group input[type=number] {
+  width: 100%; padding: 6px 8px; border: 1px solid #d0d7de;
+  border-radius: 5px; font-size: .85em; background: #f8f9fa; }
+
+.btn { width: 100%; padding: 10px; border: none; border-radius: 6px;
+        font-size: .9em; font-weight: 700; cursor: pointer; margin-top: 6px;
+        transition: opacity .15s; }
+.btn:hover { opacity: .85; }
+.btn-primary { background: #2980b9; color: #fff; }
+.btn-secondary { background: #ecf0f1; color: #2c3e50; }
+
+.legend-box { display: flex; gap: 8px; flex-direction: column;
+               font-size: .8em; margin-top: 10px; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Conteúdo principal ── */
+.main { flex: 1; padding: 20px; overflow-y: auto; }
+
+.stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.stat-card { background: #fff; border-radius: 8px; padding: 14px 18px;
+              box-shadow: 0 1px 3px rgba(0,0,0,.08); flex: 1; min-width: 140px; }
+.stat-card .label { font-size: .72em; color: #7f8c8d; text-transform: uppercase;
+                     letter-spacing: .05em; margin-bottom: 4px; }
+.stat-card .value { font-size: 1.6em; font-weight: 700; }
+.stat-card .sub { font-size: .75em; color: #95a5a6; margin-top: 2px; }
+
+.section-title { font-size: .95em; font-weight: 700; color: #1a5276;
+                  border-left: 4px solid #2980b9; padding-left: 10px;
+                  margin: 24px 0 12px; text-transform: uppercase; letter-spacing: .04em; }
+
+/* ── Tabela ── */
+.table-wrap { overflow-x: auto; background: #fff; border-radius: 8px;
+               box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 20px; }
+table { width: 100%; border-collapse: collapse; font-size: .82em; }
+thead th { background: #1a5276; color: #fff; padding: 9px 10px; text-align: left;
+            font-size: .78em; font-weight: 600; white-space: nowrap;
+            position: sticky; top: 0; z-index: 1; }
+tbody tr:nth-child(even) { background: #f8f9fa; }
+tbody tr:hover { background: #eaf3fb; }
+td { padding: 7px 10px; border-bottom: 1px solid #ecf0f1; vertical-align: middle; }
+td.pair-sep { background: #dde3ea !important; height: 2px; padding: 0; }
+
+.badge { display: inline-block; padding: 2px 8px; border-radius: 4px;
+          font-size: .75em; font-weight: 700; color: #fff; white-space: nowrap; }
+.badge-caso     { background: #e74c3c; }
+.badge-controle { background: #2980b9; }
+.badge-cidade   { padding: 2px 6px; border-radius: 3px; font-size: .72em; font-weight: 600; color: #fff; }
+
+.ivs-bar { display: flex; align-items: center; gap: 6px; }
+.ivs-bg  { flex: 1; height: 5px; background: #ecf0f1; border-radius: 3px; min-width: 50px; }
+.ivs-fill { height: 100%; border-radius: 3px; }
+.ivs-val { font-size: .8em; font-weight: 600; min-width: 32px; text-align: right; }
+
+.dim-mini { display: flex; gap: 3px; }
+.dim-pill { font-size: .68em; padding: 1px 5px; border-radius: 3px;
+             background: #ecf0f1; color: #555; white-space: nowrap; }
+
+.pop-val { font-size: .82em; color: #555; }
+
+/* ── Não pareadas ── */
+.unpaired-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.unpaired-chip { background: #fef9e7; border: 1px solid #f39c12;
+                  border-radius: 5px; padding: 5px 10px; font-size: .78em; }
+
+.empty-msg { color: #aaa; font-style: italic; font-size: .9em; padding: 16px; }
+
+/* ── Export ── */
+.export-bar { display: flex; gap: 10px; margin-bottom: 16px; }
+
+@media (max-width: 800px) {
+  .layout { flex-direction: column; }
+  .sidebar { width: 100%; border-right: none; border-bottom: 1px solid #dde3ea; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Estudo Caso-Controle — IVSaúde UBS</h1>
+  <p>Pareamento aleatório de unidades por vulnerabilidade e porte populacional · Porto Alegre · Pelotas · Betim</p>
+</div>
+
+<div class="layout">
+
+<!-- ── Sidebar ── -->
+<div class="sidebar">
+  <h2>Definição de grupos</h2>
+
+  <div class="control-group">
+    <label>Limiar IVS — <strong>Caso</strong> (vulnerabilidade ≥)</label>
+    <input type="range" id="limiarCaso" min="0.30" max="0.90" step="0.01" value="0.55"
+           oninput="document.getElementById('vCaso').textContent=parseFloat(this.value).toFixed(2)">
+    <div class="range-val" id="vCaso">0.55</div>
+  </div>
+
+  <div class="control-group">
+    <label>Limiar IVS — <strong>Controle</strong> (vulnerabilidade ≤)</label>
+    <input type="range" id="limiarControle" min="0.10" max="0.70" step="0.01" value="0.40"
+           oninput="document.getElementById('vControle').textContent=parseFloat(this.value).toFixed(2)">
+    <div class="range-val" id="vControle">0.40</div>
+  </div>
+
+  <div class="control-group">
+    <label>Razão caso:controle</label>
+    <select id="ratio">
+      <option value="1">1:1</option>
+      <option value="2" selected>1:2</option>
+      <option value="3">1:3</option>
+      <option value="4">1:4</option>
+    </select>
+  </div>
+
+  <div class="control-group">
+    <label>Tolerância populacional (±%)</label>
+    <input type="range" id="tolPop" min="5" max="100" step="5" value="50"
+           oninput="document.getElementById('vTol').textContent=this.value+'%'">
+    <div class="range-val" id="vTol">50%</div>
+  </div>
+
+  <div class="control-group">
+    <label>Semente aleatória</label>
+    <input type="number" id="seed" value="42" min="1" max="9999">
+  </div>
+
+  <button class="btn btn-primary" onclick="run()">▶ Gerar pareamento</button>
+  <button class="btn btn-secondary" onclick="randomSeed()">⟳ Nova semente aleatória</button>
+
+  <h2>Legenda</h2>
+  <div class="legend-box">
+    <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Caso (alta vulnerabilidade)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Controle (baixa vulnerabilidade)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Porto Alegre</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#8e44ad"></div> Pelotas</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#16a085"></div> Betim</div>
+  </div>
+
+  <h2>Metodologia</h2>
+  <p style="font-size:.78em;color:#555;line-height:1.5">
+    UBS são classificadas como <em>caso</em> ou <em>controle</em> pelo IVS calculado
+    (Censo IBGE 2022 · INEP · OSM). Pareamento 1:N dentro da mesma cidade,
+    priorizando controles com população mais próxima ao caso (tolerância configurável).
+    Seleção aleatória com semente reproduzível.
+  </p>
+</div>
+
+<!-- ── Main ── -->
+<div class="main">
+  <div id="statsRow" class="stats-row"></div>
+  <div class="export-bar">
+    <button class="btn btn-secondary" style="width:auto;padding:7px 16px"
+            onclick="exportCSV()">⬇ Exportar CSV</button>
+  </div>
+  <div class="section-title">Pares caso-controle por cidade</div>
+  <div id="tablesArea"></div>
+  <div id="unpairedArea"></div>
+</div>
+
+</div><!-- layout -->
+
+<script>
+const UBS_DATA = [{"id": "433594", "nome": "Clinica Da Familia Alvaro Difini", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11919, "ivs": 0.4383, "D1": 0.497, "D2": 0.2354, "D3": 0.5, "D4": 0.7185, "D5": 0.5815}, {"id": "804959", "nome": "Saude Prisional Pepoa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5091, "ivs": 0.5315, "D1": 0.5047, "D2": 0.5205, "D3": 0.5, "D4": 0.7774, "D5": 0.5376}, {"id": "809527", "nome": "Centro De Saude Iapi", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 32652, "ivs": 0.1165, "D1": 0.016, "D2": 0.0958, "D3": 0.5, "D4": 0.2732, "D5": 0.3952}, {"id": "2237113", "nome": "Unidade De Saude Ilha Da Pintada", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3878, "ivs": 0.4508, "D1": 0.353, "D2": 0.5497, "D3": 0.5, "D4": 0.6179, "D5": 0.4988}, {"id": "2237210", "nome": "Unidade De Saude Timbauva", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9256, "ivs": 0.5627, "D1": 0.5795, "D2": 0.4469, "D3": 0.5, "D4": 0.9384, "D5": 0.6886}, {"id": "2237237", "nome": "Unidade De Saude Milta Rodrigues", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7841, "ivs": 0.4872, "D1": 0.4106, "D2": 0.5686, "D3": 0.5, "D4": 0.6297, "D5": 0.5499}, {"id": "2237245", "nome": "Unidade De Saude Assis Brasil", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5617, "ivs": 0.2393, "D1": 0.1935, "D2": 0.1519, "D3": 0.5, "D4": 0.4787, "D5": 0.4366}, {"id": "2237288", "nome": "Unidade De Saude Aparicio Borges", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4991, "ivs": 0.3888, "D1": 0.3852, "D2": 0.2934, "D3": 0.5, "D4": 0.5928, "D5": 0.5384}, {"id": "2237296", "nome": "Unidade De Saude Orfanotrofio", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6061, "ivs": 0.3773, "D1": 0.3494, "D2": 0.3497, "D3": 0.5, "D4": 0.4712, "D5": 0.5019}, {"id": "2237318", "nome": "Unidade De Saude Cristal", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6490, "ivs": 0.4597, "D1": 0.6155, "D2": 0.0838, "D3": 0.5, "D4": 0.8132, "D5": 0.5916}, {"id": "2237326", "nome": "Unidade De Saude Cruzeiro Do Sul", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4608, "ivs": 0.5003, "D1": 0.548, "D2": 0.3663, "D3": 0.5, "D4": 0.69, "D5": 0.5619}, {"id": "2237342", "nome": "Unidade De Saude Mapa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7367, "ivs": 0.3987, "D1": 0.4478, "D2": 0.1872, "D3": 0.5, "D4": 0.716, "D5": 0.5706}, {"id": "2237350", "nome": "Unidade De Saude Recreio Da Divisa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3345, "ivs": 0.5652, "D1": 0.5826, "D2": 0.4621, "D3": 0.5, "D4": 0.8932, "D5": 0.688}, {"id": "2237369", "nome": "Unidade De Saude Bananeiras", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 1884, "ivs": 0.3734, "D1": 0.2792, "D2": 0.5139, "D3": 0.5, "D4": 0.2751, "D5": 0.3819}, {"id": "2237377", "nome": "Unidade De Saude Sao Jose", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4587, "ivs": 0.4706, "D1": 0.5079, "D2": 0.3941, "D3": 0.5, "D4": 0.4835, "D5": 0.4837}, {"id": "2237423", "nome": "Unidade De Saude Sao Borja", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4272, "ivs": 0.4241, "D1": 0.354, "D2": 0.423, "D3": 0.5, "D4": 0.7428, "D5": 0.5402}, {"id": "2237458", "nome": "Unidade De Saude Herdeiros", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4909, "ivs": 0.3575, "D1": 0.3557, "D2": 0.2385, "D3": 0.5, "D4": 0.604, "D5": 0.4901}, {"id": "2237482", "nome": "Unidade De Saude Pitoresca", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4613, "ivs": 0.6494, "D1": 0.645, "D2": 0.6554, "D3": 0.5, "D4": 0.8471, "D5": 0.6219}, {"id": "2237504", "nome": "Unidade De Saude Nazare", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 13801, "ivs": 0.2156, "D1": 0.0562, "D2": 0.357, "D3": 0.5, "D4": 0.2781, "D5": 0.4056}, {"id": "2237512", "nome": "Unidade De Saude Osmar Freitas", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4868, "ivs": 0.2385, "D1": 0.2849, "D2": 0.0062, "D3": 0.5, "D4": 0.4433, "D5": 0.4345}, {"id": "2237539", "nome": "Unidade De Saude Campos Do Cristal", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5521, "ivs": 0.4042, "D1": 0.3755, "D2": 0.3086, "D3": 0.5, "D4": 0.778, "D5": 0.582}, {"id": "2237733", "nome": "Unidade De Saude Tijuca", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9520, "ivs": 0.4324, "D1": 0.3737, "D2": 0.4642, "D3": 0.5, "D4": 0.5671, "D5": 0.5492}, {"id": "2237792", "nome": "Clinica Da Familia Morro Santana", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3896, "ivs": 0.3022, "D1": 0.2641, "D2": 0.2598, "D3": 0.5, "D4": 0.4195, "D5": 0.4305}, {"id": "2237903", "nome": "Unidade De Saude Graciliano Ramos", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9848, "ivs": 0.2283, "D1": 0.0692, "D2": 0.372, "D3": 0.5, "D4": 0.307, "D5": 0.3743}, {"id": "2237911", "nome": "Unidade De Saude Safira Nova", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5436, "ivs": 0.5156, "D1": 0.4485, "D2": 0.5787, "D3": 0.5, "D4": 0.6964, "D5": 0.598}, {"id": "2237946", "nome": "Unidade De Saude Jardim Carvalho", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4069, "ivs": 0.3515, "D1": 0.354, "D2": 0.239, "D3": 0.5, "D4": 0.5305, "D5": 0.5189}, {"id": "2237954", "nome": "Unidade De Saude Jardim Protasio Alves", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 10288, "ivs": 0.591, "D1": 0.5086, "D2": 0.678, "D3": 0.5, "D4": 0.8802, "D5": 0.6408}, {"id": "2264196", "nome": "Unidade De Saude Jardim Da Fapa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6405, "ivs": 0.3564, "D1": 0.3983, "D2": 0.1633, "D3": 0.5, "D4": 0.5859, "D5": 0.5681}, {"id": "2264218", "nome": "Unidade De Saude Beco Dos Coqueiros", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4041, "ivs": 0.5033, "D1": 0.4917, "D2": 0.481, "D3": 0.5, "D4": 0.6478, "D5": 0.5654}, {"id": "2264226", "nome": "Unidade De Saude Sao Gabriel", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9177, "ivs": 0.2267, "D1": 0.191, "D2": 0.1433, "D3": 0.5, "D4": 0.3621, "D5": 0.4617}, {"id": "2264234", "nome": "Unidade De Saude Quinta Unidade", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6689, "ivs": 0.6094, "D1": 0.632, "D2": 0.5257, "D3": 0.5, "D4": 0.9043, "D5": 0.665}, {"id": "2264250", "nome": "Unidade De Saude Passo Das Pedras Ii", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4150, "ivs": 0.5096, "D1": 0.4759, "D2": 0.5088, "D3": 0.5, "D4": 0.7144, "D5": 0.5955}, {"id": "2264269", "nome": "Unidade De Saude Maria Da Conceicao Marcelo Martins Moreira", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6216, "ivs": 0.3699, "D1": 0.4152, "D2": 0.1849, "D3": 0.5, "D4": 0.5861, "D5": 0.498}, {"id": "2264285", "nome": "Unidade De Saude Farrapos", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 12016, "ivs": 0.2734, "D1": 0.235, "D2": 0.1963, "D3": 0.5, "D4": 0.4658, "D5": 0.4881}, {"id": "2264315", "nome": "Unidade De Saude Santa Tereza", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 1546, "ivs": 0.4889, "D1": 0.4908, "D2": 0.4189, "D3": 0.5, "D4": 0.7065, "D5": 0.5669}, {"id": "2264331", "nome": "Clinica Da Familia Navegantes", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 15217, "ivs": 0.1558, "D1": 0.0851, "D2": 0.1297, "D3": 0.5, "D4": 0.2139, "D5": 0.3619}, {"id": "2264366", "nome": "Unidade De Saude Ilha Dos Marinheiros", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 1918, "ivs": 0.6276, "D1": 0.5931, "D2": 0.6494, "D3": 0.5, "D4": 0.9211, "D5": 0.6251}, {"id": "2264374", "nome": "Clinica Da Familia Diretor Pestana", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5757, "ivs": 0.4879, "D1": 0.4314, "D2": 0.5065, "D3": 0.5, "D4": 0.7313, "D5": 0.5865}, {"id": "2264382", "nome": "Unidade De Saude Santa Cecilia", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 16300, "ivs": 0.1686, "D1": 0.0538, "D2": 0.2514, "D3": 0.5, "D4": 0.1058, "D5": 0.3899}, {"id": "2264390", "nome": "Clinica Da Familia Modelo", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 45260, "ivs": 0.1536, "D1": 0.1132, "D2": 0.0992, "D3": 0.5, "D4": 0.1223, "D5": 0.3708}, {"id": "2264404", "nome": "Clinica Da Familia Jose Mauro Ceratti Lopes", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6001, "ivs": 0.6665, "D1": 0.5786, "D2": 0.8015, "D3": 0.5, "D4": 0.9131, "D5": 0.6846}, {"id": "2264412", "nome": "Unidade De Saude Chacara Do Banco", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 14829, "ivs": 0.4814, "D1": 0.4444, "D2": 0.442, "D3": 0.5, "D4": 0.8006, "D5": 0.6291}, {"id": "2264420", "nome": "Unidade De Saude Cidade De Deus", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7843, "ivs": 0.3151, "D1": 0.2816, "D2": 0.2244, "D3": 0.5, "D4": 0.5828, "D5": 0.5198}, {"id": "2264439", "nome": "Unidade De Saude Morro Dos Sargentos", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5101, "ivs": 0.4414, "D1": 0.4137, "D2": 0.4062, "D3": 0.5, "D4": 0.6536, "D5": 0.5225}, {"id": "2264447", "nome": "Unidade De Saude Sao Vicente Martir", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 13859, "ivs": 0.2417, "D1": 0.1289, "D2": 0.3044, "D3": 0.5, "D4": 0.3436, "D5": 0.422}, {"id": "2264455", "nome": "Unidade De Saude Ponta Grossa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4956, "ivs": 0.3208, "D1": 0.2723, "D2": 0.277, "D3": 0.5, "D4": 0.5248, "D5": 0.4811}, {"id": "2264463", "nome": "Unidade De Saude Beco Do Adelar", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9991, "ivs": 0.3064, "D1": 0.2103, "D2": 0.3196, "D3": 0.5, "D4": 0.5637, "D5": 0.517}, {"id": "2264471", "nome": "Clinica Da Familia Belem Novo", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9057, "ivs": 0.3818, "D1": 0.357, "D2": 0.3391, "D3": 0.5, "D4": 0.5261, "D5": 0.475}, {"id": "2264498", "nome": "Unidade De Saude Belem Velho", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 2452, "ivs": 0.4219, "D1": 0.2247, "D2": 0.6577, "D3": 0.5, "D4": 0.6542, "D5": 0.495}, {"id": "2264501", "nome": "Unidade De Saude Calabria", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7039, "ivs": 0.3478, "D1": 0.2069, "D2": 0.5079, "D3": 0.5, "D4": 0.4111, "D5": 0.4562}, {"id": "2264528", "nome": "Unidade De Saude Camaqua", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 10520, "ivs": 0.256, "D1": 0.2142, "D2": 0.1896, "D3": 0.5, "D4": 0.4129, "D5": 0.4505}, {"id": "2264536", "nome": "Unidade De Saude Campo Novo", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8750, "ivs": 0.3977, "D1": 0.3255, "D2": 0.4099, "D3": 0.5, "D4": 0.6397, "D5": 0.5372}, {"id": "2264544", "nome": "Unidade De Saude Ipanema", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9377, "ivs": 0.1505, "D1": 0.0891, "D2": 0.0633, "D3": 0.5, "D4": 0.3659, "D5": 0.3858}, {"id": "2264552", "nome": "Unidade De Saude Jardim Das Palmeiras", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7520, "ivs": 0.2569, "D1": 0.2245, "D2": 0.1884, "D3": 0.5, "D4": 0.3741, "D5": 0.4091}, {"id": "2264560", "nome": "Unidade De Saude Lami", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6712, "ivs": 0.4669, "D1": 0.4128, "D2": 0.484, "D3": 0.5, "D4": 0.6834, "D5": 0.5329}, {"id": "2264579", "nome": "Unidade De Saude Monte Cristo", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7137, "ivs": 0.2798, "D1": 0.2661, "D2": 0.1715, "D3": 0.5, "D4": 0.4536, "D5": 0.4535}, {"id": "2264587", "nome": "Unidade De Saude Restinga", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11682, "ivs": 0.4844, "D1": 0.5729, "D2": 0.2556, "D3": 0.5, "D4": 0.7405, "D5": 0.601}, {"id": "2264595", "nome": "Clinica Da Familia Tristeza", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 13876, "ivs": 0.1662, "D1": 0.0867, "D2": 0.1315, "D3": 0.5, "D4": 0.3234, "D5": 0.3766}, {"id": "2264609", "nome": "Unidade De Saude Macedonia", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7475, "ivs": 0.4052, "D1": 0.5225, "D2": 0.0837, "D3": 0.5, "D4": 0.7141, "D5": 0.5832}, {"id": "2264617", "nome": "Unidade De Saude Asa Branca", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3378, "ivs": 0.3729, "D1": 0.3286, "D2": 0.3185, "D3": 0.5, "D4": 0.6501, "D5": 0.5493}, {"id": "2264633", "nome": "Unidade De Saude Nova Brasilia", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8783, "ivs": 0.3833, "D1": 0.3511, "D2": 0.3299, "D3": 0.5, "D4": 0.613, "D5": 0.4888}, {"id": "2264641", "nome": "Unidade De Saude Nova Gleba", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9361, "ivs": 0.3752, "D1": 0.3653, "D2": 0.2848, "D3": 0.5, "D4": 0.5837, "D5": 0.5197}, {"id": "2264676", "nome": "Unidade De Saude Vila Elizabeth", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5894, "ivs": 0.2724, "D1": 0.27, "D2": 0.1176, "D3": 0.5, "D4": 0.5209, "D5": 0.5233}, {"id": "2264684", "nome": "Unidade De Saude Sarandi", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8913, "ivs": 0.2718, "D1": 0.2586, "D2": 0.1504, "D3": 0.5, "D4": 0.4806, "D5": 0.4469}, {"id": "2264692", "nome": "Unidade De Saude Santa Rosa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6695, "ivs": 0.4195, "D1": 0.4306, "D2": 0.3299, "D3": 0.5, "D4": 0.5705, "D5": 0.4809}, {"id": "2264706", "nome": "Unidade De Saude Ramos", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7473, "ivs": 0.4267, "D1": 0.5001, "D2": 0.1768, "D3": 0.5, "D4": 0.7792, "D5": 0.5631}, {"id": "2264714", "nome": "Unidade De Saude Jenor Jarros", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 2692, "ivs": 0.3184, "D1": 0.4072, "D2": 0.0149, "D3": 0.5, "D4": 0.6272, "D5": 0.505}, {"id": "2264722", "nome": "Unidade De Saude Esmeralda", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6193, "ivs": 0.4765, "D1": 0.4183, "D2": 0.4879, "D3": 0.5, "D4": 0.7418, "D5": 0.5807}, {"id": "2264730", "nome": "Unidade De Saude Sao Pedro", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3192, "ivs": 0.2496, "D1": 0.3181, "D2": 0.0069, "D3": 0.5, "D4": 0.3805, "D5": 0.4028}, {"id": "2264749", "nome": "Unidade De Saude Pitinga", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5975, "ivs": 0.5474, "D1": 0.4842, "D2": 0.5957, "D3": 0.5, "D4": 0.8123, "D5": 0.5829}, {"id": "2264757", "nome": "Unidade De Saude Vicosa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3503, "ivs": 0.5051, "D1": 0.4708, "D2": 0.4824, "D3": 0.5, "D4": 0.7834, "D5": 0.6159}, {"id": "2264765", "nome": "Unidade De Saude Mato Sampaio", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7738, "ivs": 0.3363, "D1": 0.2518, "D2": 0.3507, "D3": 0.5, "D4": 0.5597, "D5": 0.5232}, {"id": "2264773", "nome": "Unidade De Saude Vila Brasilia", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11271, "ivs": 0.2771, "D1": 0.2359, "D2": 0.2312, "D3": 0.5, "D4": 0.3786, "D5": 0.4774}, {"id": "2264781", "nome": "Unidade De Saude Vila Pinto", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5976, "ivs": 0.5947, "D1": 0.6453, "D2": 0.5136, "D3": 0.5, "D4": 0.7004, "D5": 0.5963}, {"id": "2264803", "nome": "Unidade De Saude Laranjeiras", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3829, "ivs": 0.2998, "D1": 0.2425, "D2": 0.2955, "D3": 0.5, "D4": 0.3719, "D5": 0.5088}, {"id": "2264811", "nome": "Unidade De Saude Vila Ipiranga", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3518, "ivs": 0.2351, "D1": 0.1403, "D2": 0.2584, "D3": 0.5, "D4": 0.3709, "D5": 0.3853}, {"id": "2264838", "nome": "Unidade De Saude Sao Carlos", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6013, "ivs": 0.4145, "D1": 0.3947, "D2": 0.3864, "D3": 0.5, "D4": 0.5188, "D5": 0.4833}, {"id": "2264846", "nome": "Unidade De Saude Vila Jardim", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 18910, "ivs": 0.2674, "D1": 0.1417, "D2": 0.3633, "D3": 0.5, "D4": 0.3638, "D5": 0.4239}, {"id": "2264854", "nome": "Unidade De Saude Sao Cristovao", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6189, "ivs": 0.3456, "D1": 0.3427, "D2": 0.2333, "D3": 0.5, "D4": 0.5443, "D5": 0.5386}, {"id": "2264862", "nome": "Unidade De Saude Rubem Berta", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7605, "ivs": 0.3892, "D1": 0.5076, "D2": 0.0853, "D3": 0.5, "D4": 0.6166, "D5": 0.5245}, {"id": "2264870", "nome": "Unidade De Saude Chacara Da Fumaca", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6662, "ivs": 0.45, "D1": 0.5502, "D2": 0.176, "D3": 0.5, "D4": 0.7514, "D5": 0.6007}, {"id": "2264889", "nome": "Unidade De Saude Vila Safira", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11447, "ivs": 0.5185, "D1": 0.501, "D2": 0.4682, "D3": 0.5, "D4": 0.8049, "D5": 0.6545}, {"id": "2264897", "nome": "Unidade De Saude Wenceslau Fontoura", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5385, "ivs": 0.5003, "D1": 0.5757, "D2": 0.2786, "D3": 0.5, "D4": 0.8239, "D5": 0.6494}, {"id": "2264900", "nome": "Unidade De Saude Batista Flores", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3470, "ivs": 0.4578, "D1": 0.5009, "D2": 0.2974, "D3": 0.5, "D4": 0.7137, "D5": 0.5531}, {"id": "2264919", "nome": "Unidade De Saude Planalto", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7514, "ivs": 0.3268, "D1": 0.215, "D2": 0.4004, "D3": 0.5, "D4": 0.4916, "D5": 0.4905}, {"id": "2264927", "nome": "Unidade De Saude Tronco", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8239, "ivs": 0.4717, "D1": 0.4915, "D2": 0.3705, "D3": 0.5, "D4": 0.6763, "D5": 0.533}, {"id": "2264935", "nome": "Unidade De Saude Santa Anita", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8199, "ivs": 0.3852, "D1": 0.3421, "D2": 0.3787, "D3": 0.5, "D4": 0.5092, "D5": 0.4933}, {"id": "2264943", "nome": "Unidade De Saude Alto Erechim", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6109, "ivs": 0.321, "D1": 0.2167, "D2": 0.4126, "D3": 0.5, "D4": 0.3806, "D5": 0.4225}, {"id": "2264951", "nome": "Unidade De Saude Jardim Cascata", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6856, "ivs": 0.4787, "D1": 0.5254, "D2": 0.3255, "D3": 0.5, "D4": 0.719, "D5": 0.5404}, {"id": "2264978", "nome": "Unidade De Saude Mato Grosso", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 534, "ivs": 0.6939, "D1": 0.6163, "D2": 0.8727, "D3": 0.5, "D4": 0.778, "D5": 0.5858}, {"id": "2264986", "nome": "Clinica Da Familia Primeiro De Maio", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3158, "ivs": 0.4668, "D1": 0.4232, "D2": 0.4714, "D3": 0.5, "D4": 0.6609, "D5": 0.5486}, {"id": "2264994", "nome": "Unidade De Saude Vila Gaucha", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 10243, "ivs": 0.2666, "D1": 0.1834, "D2": 0.2765, "D3": 0.5, "D4": 0.4123, "D5": 0.446}, {"id": "2265001", "nome": "Unidade De Saude Nonoai", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3541, "ivs": 0.3009, "D1": 0.2254, "D2": 0.3313, "D3": 0.5, "D4": 0.3777, "D5": 0.4301}, {"id": "2265028", "nome": "Unidade De Saude Estrada Dos Alpes", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3297, "ivs": 0.4467, "D1": 0.3809, "D2": 0.5206, "D3": 0.5, "D4": 0.5124, "D5": 0.4548}, {"id": "2265036", "nome": "Unidade De Saude Vila Cruzeiro", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 1461, "ivs": 0.4315, "D1": 0.476, "D2": 0.2707, "D3": 0.5, "D4": 0.6391, "D5": 0.5575}, {"id": "2265044", "nome": "Unidade De Saude Gloria", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 12327, "ivs": 0.2682, "D1": 0.2213, "D2": 0.2112, "D3": 0.5, "D4": 0.4375, "D5": 0.4616}, {"id": "2265079", "nome": "Unidade De Saude Jardim Itu", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5486, "ivs": 0.1898, "D1": 0.075, "D2": 0.2308, "D3": 0.5, "D4": 0.3198, "D5": 0.3713}, {"id": "2265087", "nome": "Unidade De Saude Costa E Silva", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5255, "ivs": 0.3397, "D1": 0.3388, "D2": 0.2551, "D3": 0.5, "D4": 0.4329, "D5": 0.4586}, {"id": "2265095", "nome": "Unidade De Saude Parque Dos Maias", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9765, "ivs": 0.2774, "D1": 0.2904, "D2": 0.1029, "D3": 0.5, "D4": 0.5308, "D5": 0.4436}, {"id": "2265109", "nome": "Unidade De Saude Floresta", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11474, "ivs": 0.1766, "D1": 0.068, "D2": 0.2117, "D3": 0.5, "D4": 0.2745, "D5": 0.3562}, {"id": "2265125", "nome": "Unidade De Saude Jardim Leopoldina", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 15618, "ivs": 0.2718, "D1": 0.2782, "D2": 0.1529, "D3": 0.5, "D4": 0.3487, "D5": 0.4477}, {"id": "2265133", "nome": "Unidade De Saude Sesc", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4481, "ivs": 0.3456, "D1": 0.2672, "D2": 0.4148, "D3": 0.5, "D4": 0.354, "D5": 0.4622}, {"id": "2265141", "nome": "Unidade De Saude Barao De Bage", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 12333, "ivs": 0.1642, "D1": 0.0919, "D2": 0.0941, "D3": 0.5, "D4": 0.3963, "D5": 0.4127}, {"id": "2265168", "nome": "Unidade De Saude Conceicao", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 22064, "ivs": 0.1579, "D1": 0.0556, "D2": 0.1883, "D3": 0.5, "D4": 0.1967, "D5": 0.3924}, {"id": "2265176", "nome": "Unidade De Saude Santissima Trindade", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4525, "ivs": 0.5019, "D1": 0.5401, "D2": 0.3338, "D3": 0.5, "D4": 0.8629, "D5": 0.6318}, {"id": "2265184", "nome": "Unidade De Saude Divina Providencia", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3255, "ivs": 0.3672, "D1": 0.3659, "D2": 0.2548, "D3": 0.5, "D4": 0.605, "D5": 0.4723}, {"id": "2265192", "nome": "Unidade De Saude Coinma", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6814, "ivs": 0.24, "D1": 0.1827, "D2": 0.2019, "D3": 0.5, "D4": 0.3736, "D5": 0.4102}, {"id": "2265206", "nome": "Unidade De Saude Nossa Senhora Aparecida", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3451, "ivs": 0.4357, "D1": 0.3667, "D2": 0.4972, "D3": 0.5, "D4": 0.5426, "D5": 0.4884}, {"id": "2265214", "nome": "Unidade De Saude Passo Das Pedras I", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5997, "ivs": 0.2726, "D1": 0.3447, "D2": 0.0127, "D3": 0.5, "D4": 0.4629, "D5": 0.4727}, {"id": "2265222", "nome": "Unidade De Saude Alto Embratel", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5415, "ivs": 0.4491, "D1": 0.4755, "D2": 0.3184, "D3": 0.5, "D4": 0.6841, "D5": 0.5556}, {"id": "2693437", "nome": "Unidade De Saude Guaruja", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9070, "ivs": 0.2684, "D1": 0.1727, "D2": 0.2926, "D3": 0.5, "D4": 0.4451, "D5": 0.432}, {"id": "3306453", "nome": "Unidade De Saude Nossa Senhora Das Gracas", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9986, "ivs": 0.3129, "D1": 0.2495, "D2": 0.3397, "D3": 0.5, "D4": 0.3385, "D5": 0.4569}, {"id": "3321401", "nome": "Unidade De Saude Santa Maria", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5954, "ivs": 0.4994, "D1": 0.4384, "D2": 0.5103, "D3": 0.5, "D4": 0.819, "D5": 0.5781}, {"id": "3321428", "nome": "Unidade De Saude Santa Fe", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3437, "ivs": 0.2684, "D1": 0.2023, "D2": 0.2401, "D3": 0.5, "D4": 0.4539, "D5": 0.447}, {"id": "3437159", "nome": "Unidade De Saude Mario Quintana", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4001, "ivs": 0.5025, "D1": 0.529, "D2": 0.4021, "D3": 0.5, "D4": 0.7005, "D5": 0.5645}, {"id": "3492575", "nome": "Pronto Atendimento Saude Restinga", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 27408, "ivs": 0.1587, "D1": 0.0943, "D2": 0.1561, "D3": 0.5, "D4": 0.0977, "D5": 0.3446}, {"id": "3927997", "nome": "Unidade De Saude Santo Agostinho", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4498, "ivs": 0.3597, "D1": 0.3362, "D2": 0.2974, "D3": 0.5, "D4": 0.5299, "D5": 0.502}, {"id": "3979938", "nome": "Unidade De Saude Divisa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6682, "ivs": 0.3476, "D1": 0.2923, "D2": 0.3608, "D3": 0.5, "D4": 0.4252, "D5": 0.4595}, {"id": "4560191", "nome": "Saude Prisional Nugesp", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 16540, "ivs": 0.2033, "D1": 0.1342, "D2": 0.2003, "D3": 0.5, "D4": 0.2255, "D5": 0.4017}, {"id": "5007518", "nome": "Unidade De Saude Rincao", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7113, "ivs": 0.4047, "D1": 0.3809, "D2": 0.336, "D3": 0.5, "D4": 0.6587, "D5": 0.5392}, {"id": "5377978", "nome": "Unidade De Saude Esperanca Cordeiro", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11147, "ivs": 0.2319, "D1": 0.1532, "D2": 0.198, "D3": 0.5, "D4": 0.4601, "D5": 0.4545}, {"id": "5473764", "nome": "Unidade De Saude Santa Helena", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5598, "ivs": 0.4378, "D1": 0.4118, "D2": 0.3868, "D3": 0.5, "D4": 0.6914, "D5": 0.5266}, {"id": "5473810", "nome": "Unidade De Saude Lomba Do Pinheiro", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6919, "ivs": 0.5302, "D1": 0.5287, "D2": 0.4982, "D3": 0.5, "D4": 0.6908, "D5": 0.5546}, {"id": "5878632", "nome": "Unidade De Saude Panorama", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 7252, "ivs": 0.4192, "D1": 0.502, "D2": 0.1538, "D3": 0.5, "D4": 0.759, "D5": 0.5682}, {"id": "6130917", "nome": "Unidade De Saude Nossa Senhora De Belem", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 2165, "ivs": 0.3062, "D1": 0.2824, "D2": 0.2167, "D3": 0.5, "D4": 0.5089, "D5": 0.4651}, {"id": "6140815", "nome": "Unidade De Saude Ilha Do Pavao", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 592, "ivs": 0.7317, "D1": 0.817, "D2": 0.6474, "D3": 0.5, "D4": 0.8193, "D5": 0.671}, {"id": "6247938", "nome": "Unidade De Saude Vila Nova Ipanema", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8461, "ivs": 0.3503, "D1": 0.2265, "D2": 0.46, "D3": 0.5, "D4": 0.5002, "D5": 0.4534}, {"id": "6676227", "nome": "Unidade De Saude Paulo Viaro", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6829, "ivs": 0.4394, "D1": 0.3825, "D2": 0.4359, "D3": 0.5, "D4": 0.7118, "D5": 0.5192}, {"id": "6883184", "nome": "Clinica Da Familia Moab Caldas", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 23658, "ivs": 0.2128, "D1": 0.1755, "D2": 0.1446, "D3": 0.5, "D4": 0.2943, "D5": 0.4042}, {"id": "6883257", "nome": "Unidade De Saude Bom Jesus", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6924, "ivs": 0.3963, "D1": 0.4227, "D2": 0.2652, "D3": 0.5, "D4": 0.5679, "D5": 0.4965}, {"id": "6883303", "nome": "Clinica Da Familia Iapi", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 20439, "ivs": 0.1259, "D1": 0.0439, "D2": 0.0957, "D3": 0.5, "D4": 0.2223, "D5": 0.3714}, {"id": "6883354", "nome": "Clinica Da Familia Santa Marta", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 2983, "ivs": 0.2696, "D1": 0.1272, "D2": 0.5004, "D3": 0.5, "D4": 0.0, "D5": 0.2942}, {"id": "6957544", "nome": "Saude Prisional Madre Pelletier", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6734, "ivs": 0.3319, "D1": 0.2698, "D2": 0.3371, "D3": 0.5, "D4": 0.4579, "D5": 0.4613}, {"id": "6957560", "nome": "Saude Prisional Cppa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 2829, "ivs": 0.3016, "D1": 0.3759, "D2": 0.0401, "D3": 0.5, "D4": 0.5183, "D5": 0.5047}, {"id": "7049579", "nome": "Unidade De Saude Fradique Vizeu", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9122, "ivs": 0.5136, "D1": 0.5188, "D2": 0.4085, "D3": 0.5, "D4": 0.8692, "D5": 0.6047}, {"id": "7076584", "nome": "Unidade De Saude Chapeu Do Sol", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 11696, "ivs": 0.381, "D1": 0.3484, "D2": 0.3006, "D3": 0.5, "D4": 0.6959, "D5": 0.5478}, {"id": "7150547", "nome": "Unidade De Saude Vila Fatima", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6446, "ivs": 0.5778, "D1": 0.7412, "D2": 0.2374, "D3": 0.5, "D4": 0.9141, "D5": 0.6451}, {"id": "7355092", "nome": "Case I", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4882, "ivs": 0.3678, "D1": 0.2983, "D2": 0.3761, "D3": 0.5, "D4": 0.5658, "D5": 0.5295}, {"id": "7355106", "nome": "Case Ii", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 210, "ivs": 0.6083, "D1": 0.5189, "D2": 0.7696, "D3": 0.5, "D4": 0.6949, "D5": 0.6191}, {"id": "7355114", "nome": "Cse Comunidade Socio Educativa", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4882, "ivs": 0.3678, "D1": 0.2983, "D2": 0.3761, "D3": 0.5, "D4": 0.5658, "D5": 0.5295}, {"id": "7355122", "nome": "Casef", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 210, "ivs": 0.6083, "D1": 0.5189, "D2": 0.7696, "D3": 0.5, "D4": 0.6949, "D5": 0.6191}, {"id": "7449283", "nome": "Unidade De Saude Domenico Feoli", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3871, "ivs": 0.4868, "D1": 0.444, "D2": 0.5207, "D3": 0.5, "D4": 0.5992, "D5": 0.5301}, {"id": "7497547", "nome": "Unidade De Saude Nucleo Esperanca", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 9193, "ivs": 0.5582, "D1": 0.6742, "D2": 0.259, "D3": 0.5, "D4": 1.0, "D5": 0.6688}, {"id": "7517904", "nome": "Unidade De Saude Paulo Avila", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 13009, "ivs": 0.3214, "D1": 0.317, "D2": 0.2132, "D3": 0.5, "D4": 0.4864, "D5": 0.4991}, {"id": "7533446", "nome": "Consultorio Na Rua Ghc", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 17637, "ivs": 0.165, "D1": 0.0605, "D2": 0.172, "D3": 0.5, "D4": 0.3089, "D5": 0.4215}, {"id": "7675992", "nome": "Unidade De Saude Indigena De Porto Alegre", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 3853, "ivs": 0.4483, "D1": 0.3963, "D2": 0.4518, "D3": 0.5, "D4": 0.6662, "D5": 0.5646}, {"id": "7794541", "nome": "Casa Bem Estar", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 67955, "ivs": 0.1533, "D1": 0.0, "D2": 0.2679, "D3": 0.5, "D4": 0.1912, "D5": 0.3824}, {"id": "7900376", "nome": "Liga Feminina", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 26552, "ivs": 0.1268, "D1": 0.0915, "D2": 0.0328, "D3": 0.5, "D4": 0.1721, "D5": 0.374}, {"id": "8006822", "nome": "Unidade De Saude Vila Vargas", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 10431, "ivs": 0.5238, "D1": 0.5777, "D2": 0.3606, "D3": 0.5, "D4": 0.8097, "D5": 0.6015}, {"id": "8006830", "nome": "Unidade De Saude Ceres", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5326, "ivs": 0.2225, "D1": 0.129, "D2": 0.2433, "D3": 0.5, "D4": 0.3287, "D5": 0.4376}, {"id": "8006849", "nome": "Unidade De Saude Ernesto Araujo", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6570, "ivs": 0.5897, "D1": 0.6318, "D2": 0.4569, "D3": 0.5, "D4": 0.9275, "D5": 0.6257}, {"id": "8006857", "nome": "Unidade De Saude Sao Miguel", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 5934, "ivs": 0.5158, "D1": 0.5451, "D2": 0.4361, "D3": 0.5, "D4": 0.6406, "D5": 0.56}, {"id": "8006865", "nome": "Clinica Da Familia Campo Da Tuca", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 4219, "ivs": 0.3298, "D1": 0.3321, "D2": 0.2495, "D3": 0.5, "D4": 0.3773, "D5": 0.4379}, {"id": "8006873", "nome": "Unidade De Saude Morro Da Cruz", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 6801, "ivs": 0.6344, "D1": 0.6794, "D2": 0.5477, "D3": 0.5, "D4": 0.8537, "D5": 0.6084}, {"id": "8006903", "nome": "Unidade De Saude Santo Alfredo", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 8020, "ivs": 0.3292, "D1": 0.3179, "D2": 0.2449, "D3": 0.5, "D4": 0.4624, "D5": 0.4883}, {"id": "8013632", "nome": "Unidade De Saude Moradas Da Hipica", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 23127, "ivs": 0.3342, "D1": 0.2486, "D2": 0.3325, "D3": 0.5, "D4": 0.6182, "D5": 0.5333}, {"id": "9948007", "nome": "Saude Prisional Ipf Mauricio Cardoso", "cidade": "Porto Alegre", "cor": "#2980b9", "pop": 27799, "ivs": 0.2303, "D1": 0.1942, "D2": 0.1738, "D3": 0.5, "D4": 0.2827, "D5": 0.4193}, {"id": "796549", "nome": "Fase", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 4250, "ivs": 0.3487, "D1": 0.2822, "D2": 0.2738, "D3": 0.7871, "D4": 0.4692, "D5": 0.4588}, {"id": "2252988", "nome": "UBS Salgado Filho", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 4833, "ivs": 0.2428, "D1": 0.1397, "D2": 0.1078, "D3": 1.0, "D4": 0.3984, "D5": 0.4342}, {"id": "2253003", "nome": "UBS Santa Silvana", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1519, "ivs": 0.5492, "D1": 0.245, "D2": 0.9213, "D3": 1.0, "D4": 0.5216, "D5": 0.427}, {"id": "2253011", "nome": "UBS Vila Nova", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1595, "ivs": 0.4713, "D1": 0.3217, "D2": 0.5851, "D3": 1.0, "D4": 0.3365, "D5": 0.3996}, {"id": "2253038", "nome": "UBS Leocadia", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 9325, "ivs": 0.2781, "D1": 0.1471, "D2": 0.2926, "D3": 0.903, "D4": 0.234, "D5": 0.3881}, {"id": "2253062", "nome": "UBS Colonia Maciel", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 968, "ivs": 0.4334, "D1": 0.2455, "D2": 0.9163, "D3": 0.065, "D4": 0.2514, "D5": 0.4574}, {"id": "2253070", "nome": "UBS Sitio Floresta", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 7300, "ivs": 0.5063, "D1": 0.4081, "D2": 0.4628, "D3": 0.8761, "D4": 0.7957, "D5": 0.608}, {"id": "2253089", "nome": "UBS Cohab Fragata", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10981, "ivs": 0.3538, "D1": 0.2572, "D2": 0.3038, "D3": 0.9176, "D4": 0.3989, "D5": 0.5186}, {"id": "2253097", "nome": "UBS Barro Duro", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 5105, "ivs": 0.4844, "D1": 0.3505, "D2": 0.4862, "D3": 1.0, "D4": 0.6525, "D5": 0.5524}, {"id": "2253100", "nome": "UBS Jardim De Allah", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 2595, "ivs": 0.4508, "D1": 0.293, "D2": 0.4524, "D3": 1.0, "D4": 0.706, "D5": 0.6071}, {"id": "2253127", "nome": "UBS Dom Pedro I", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10413, "ivs": 0.3338, "D1": 0.2564, "D2": 0.2375, "D3": 1.0, "D4": 0.3217, "D5": 0.4332}, {"id": "2253135", "nome": "UBS Getulio Vargas", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 11743, "ivs": 0.6903, "D1": 0.7015, "D2": 0.5174, "D3": 1.0, "D4": 0.8882, "D5": 0.6658}, {"id": "2253143", "nome": "UBS Sansca", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 6692, "ivs": 0.3041, "D1": 0.0991, "D2": 0.5042, "D3": 0.8648, "D4": 0.1155, "D5": 0.376}, {"id": "2253178", "nome": "UBS Cohab Pestano", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 6052, "ivs": 0.5115, "D1": 0.4721, "D2": 0.398, "D3": 0.8505, "D4": 0.7378, "D5": 0.6008}, {"id": "2253186", "nome": "UBS Cerrito Alegre", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1330, "ivs": 0.3493, "D1": 0.2683, "D2": 0.5387, "D3": 0.3195, "D4": 0.179, "D5": 0.3625}, {"id": "2253194", "nome": "UBS Fragata", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 13159, "ivs": 0.3395, "D1": 0.2442, "D2": 0.2714, "D3": 0.9312, "D4": 0.4178, "D5": 0.4747}, {"id": "2253208", "nome": "UBS Balsa", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 4672, "ivs": 0.556, "D1": 0.541, "D2": 0.4129, "D3": 1.0, "D4": 0.6324, "D5": 0.5521}, {"id": "2253216", "nome": "UBS Obelisco", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 9464, "ivs": 0.5888, "D1": 0.4933, "D2": 0.5672, "D3": 1.0, "D4": 0.7586, "D5": 0.5664}, {"id": "2253224", "nome": "UBS Navegantes", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10261, "ivs": 0.5976, "D1": 0.5876, "D2": 0.4518, "D3": 1.0, "D4": 0.7125, "D5": 0.5654}, {"id": "2253232", "nome": "UBS Laranjal", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10849, "ivs": 0.2928, "D1": 0.0925, "D2": 0.4919, "D3": 0.6664, "D4": 0.2946, "D5": 0.4403}, {"id": "2253240", "nome": "UBS Colonia Z 3", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 2559, "ivs": 0.7179, "D1": 0.6588, "D2": 0.75, "D3": 1.0, "D4": 0.6521, "D5": 0.5636}, {"id": "2253259", "nome": "UBS Virgilio Costa", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 11812, "ivs": 0.4104, "D1": 0.3054, "D2": 0.3553, "D3": 1.0, "D4": 0.5161, "D5": 0.4893}, {"id": "2253267", "nome": "UBS Bom Jesus", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 7541, "ivs": 0.5299, "D1": 0.5307, "D2": 0.3333, "D3": 1.0, "D4": 0.6722, "D5": 0.5384}, {"id": "2253275", "nome": "UBS Csu Cruzeiro", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 7578, "ivs": 0.3201, "D1": 0.2643, "D2": 0.1926, "D3": 1.0, "D4": 0.2728, "D5": 0.4152}, {"id": "2253283", "nome": "UBS Simoes Lopes", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 9023, "ivs": 0.39, "D1": 0.3653, "D2": 0.2723, "D3": 0.8997, "D4": 0.3368, "D5": 0.4399}, {"id": "2253291", "nome": "UBS Py Crespo", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 9721, "ivs": 0.4318, "D1": 0.3055, "D2": 0.4148, "D3": 1.0, "D4": 0.5605, "D5": 0.4899}, {"id": "2253305", "nome": "UBS Pedreiras", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1604, "ivs": 0.5187, "D1": 0.4353, "D2": 0.5191, "D3": 1.0, "D4": 0.4501, "D5": 0.4692}, {"id": "2253313", "nome": "UBS Monte Bonito", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1040, "ivs": 0.4739, "D1": 0.3303, "D2": 0.5653, "D3": 1.0, "D4": 0.3836, "D5": 0.4214}, {"id": "2253321", "nome": "UBS Arco Iris", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 5223, "ivs": 0.4048, "D1": 0.2887, "D2": 0.4007, "D3": 0.8268, "D4": 0.5825, "D5": 0.5483}, {"id": "2253348", "nome": "UBS Cordeiro De Farias", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 751, "ivs": 0.5174, "D1": 0.2157, "D2": 0.8395, "D3": 1.0, "D4": 0.6175, "D5": 0.4133}, {"id": "2253356", "nome": "UBS Cohab Guabiroba", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10187, "ivs": 0.4748, "D1": 0.3996, "D2": 0.4151, "D3": 1.0, "D4": 0.5078, "D5": 0.4926}, {"id": "2253364", "nome": "UBS Cascata", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 2200, "ivs": 0.4897, "D1": 0.3977, "D2": 0.5475, "D3": 1.0, "D4": 0.2424, "D5": 0.3611}, {"id": "2253372", "nome": "UBS Colonia Osorio", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1036, "ivs": 0.3753, "D1": 0.1672, "D2": 0.5931, "D3": 1.0, "D4": 0.0942, "D5": 0.3139}, {"id": "2253380", "nome": "UBS Grupelli", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1719, "ivs": 0.5572, "D1": 0.3216, "D2": 0.8546, "D3": 1.0, "D4": 0.3919, "D5": 0.4352}, {"id": "2253518", "nome": "UBS Fatima", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 7424, "ivs": 0.4409, "D1": 0.4247, "D2": 0.3102, "D3": 0.8781, "D4": 0.4722, "D5": 0.4964}, {"id": "2253534", "nome": "UBS Escola Csu Areal Ufpel", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 9190, "ivs": 0.3064, "D1": 0.2171, "D2": 0.2876, "D3": 0.8031, "D4": 0.2795, "D5": 0.4451}, {"id": "2253585", "nome": "UBS Fraget", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 7333, "ivs": 0.4009, "D1": 0.36, "D2": 0.2445, "D3": 1.0, "D4": 0.4817, "D5": 0.4502}, {"id": "2253593", "nome": "UBS Escola Areal Leste Ufpel", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 8654, "ivs": 0.3838, "D1": 0.2964, "D2": 0.4573, "D3": 0.4773, "D4": 0.5133, "D5": 0.4817}, {"id": "2253607", "nome": "UBS Escola Vila Municipal Ufpel", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 2135, "ivs": 0.566, "D1": 0.5919, "D2": 0.398, "D3": 1.0, "D4": 0.5177, "D5": 0.4646}, {"id": "2254018", "nome": "UBS Dunas", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 12754, "ivs": 0.5938, "D1": 0.5695, "D2": 0.4437, "D3": 1.0, "D4": 0.788, "D5": 0.6443}, {"id": "2254026", "nome": "UBS Colonia Triunfo", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1810, "ivs": 0.4077, "D1": 0.2833, "D2": 0.7242, "D3": 0.0, "D4": 0.5084, "D5": 0.4064}, {"id": "2254034", "nome": "UBS Uniao De Bairros", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 2379, "ivs": 0.7976, "D1": 0.8309, "D2": 0.6334, "D3": 1.0, "D4": 1.0, "D5": 0.6051}, {"id": "2254042", "nome": "UBS Cohab Lindoia", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10604, "ivs": 0.4189, "D1": 0.3476, "D2": 0.3043, "D3": 1.0, "D4": 0.5507, "D5": 0.4877}, {"id": "2254069", "nome": "UBS Porto", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 6255, "ivs": 0.1942, "D1": 0.1696, "D2": 0.0251, "D3": 0.7107, "D4": 0.2901, "D5": 0.3796}, {"id": "2254077", "nome": "UBS Vila Princesa", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 5257, "ivs": 0.4768, "D1": 0.375, "D2": 0.4856, "D3": 0.8279, "D4": 0.6239, "D5": 0.5477}, {"id": "2254085", "nome": "UBS Pestano", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 1589, "ivs": 0.4766, "D1": 0.5738, "D2": 0.056, "D3": 1.0, "D4": 0.7704, "D5": 0.5639}, {"id": "2254093", "nome": "UBS Sanga Funda", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 3785, "ivs": 0.3694, "D1": 0.204, "D2": 0.5012, "D3": 0.7609, "D4": 0.3681, "D5": 0.5749}, {"id": "3018989", "nome": "UBS Corrientes", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 723, "ivs": 0.495, "D1": 0.3871, "D2": 0.4786, "D3": 1.0, "D4": 0.6106, "D5": 0.4507}, {"id": "4919327", "nome": "Consultorio Na Rua", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 3730, "ivs": 0.4116, "D1": 0.4003, "D2": 0.249, "D3": 1.0, "D4": 0.3404, "D5": 0.4786}, {"id": "5199603", "nome": "UBS Santa Terezinha", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 10810, "ivs": 0.2821, "D1": 0.1838, "D2": 0.1966, "D3": 1.0, "D4": 0.2769, "D5": 0.4534}, {"id": "6860419", "nome": "Clinicassi Pelotas", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 8009, "ivs": 0.1039, "D1": 0.0636, "D2": 0.1215, "D3": 0.2092, "D4": 0.0962, "D5": 0.3505}, {"id": "6942865", "nome": "Unidade De Saude Do Presidio Regional De Pelotas", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 4090, "ivs": 0.361, "D1": 0.2846, "D2": 0.2532, "D3": 1.0, "D4": 0.4202, "D5": 0.4555}, {"id": "7465238", "nome": "Ambulatorio Eder Vida", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 5007, "ivs": 0.073, "D1": 0.0658, "D2": 0.0006, "D3": 0.2773, "D4": 0.065, "D5": 0.3509}, {"id": "7530366", "nome": "Ambulatorio Uniao", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 2717, "ivs": 0.1951, "D1": 0.0708, "D2": 0.1764, "D3": 1.0, "D4": 0.0, "D5": 0.3386}, {"id": "9098283", "nome": "UBS Osorio", "cidade": "Pelotas", "cor": "#8e44ad", "pop": 6287, "ivs": 0.4905, "D1": 0.4879, "D2": 0.4042, "D3": 0.5682, "D4": 0.7141, "D5": 0.5667}, {"id": "856762", "nome": "UBS Celso Alves Pedrosa", "cidade": "Betim", "cor": "#16a085", "pop": 6507, "ivs": 0.5064, "D1": 0.5339, "D2": null, "D3": 0.5, "D4": 0.3502, "D5": 0.4773}, {"id": "2125900", "nome": "UBS Marimba", "cidade": "Betim", "cor": "#16a085", "pop": 9842, "ivs": 0.8105, "D1": 0.9041, "D2": null, "D3": 0.5, "D4": 0.6846, "D5": 0.5267}, {"id": "2125919", "nome": "UBS Angola Rogerio Gustavo Rezende", "cidade": "Betim", "cor": "#16a085", "pop": 15072, "ivs": 0.2851, "D1": 0.2662, "D2": null, "D3": 0.5, "D4": 0.1141, "D5": 0.3653}, {"id": "2125927", "nome": "UBS Homero Gil", "cidade": "Betim", "cor": "#16a085", "pop": 14101, "ivs": 0.5099, "D1": 0.5034, "D2": null, "D3": 0.5, "D4": 0.5662, "D5": 0.4984}, {"id": "2125935", "nome": "UBS Bueno Franco Maria Oliveira E Silva", "cidade": "Betim", "cor": "#16a085", "pop": 8883, "ivs": 0.2251, "D1": 0.2028, "D2": null, "D3": 0.5, "D4": 0.0, "D5": 0.3094}, {"id": "2125951", "nome": "UBS Cidade Verde Marcio Firmiano Gallo", "cidade": "Betim", "cor": "#16a085", "pop": 5254, "ivs": 0.2804, "D1": 0.2343, "D2": null, "D3": 0.5, "D4": 0.2832, "D5": 0.3236}, {"id": "2125978", "nome": "UBS Citrolandia Analia Marques De Oliveira", "cidade": "Betim", "cor": "#16a085", "pop": 9015, "ivs": 0.8431, "D1": 0.9399, "D2": null, "D3": 0.5, "D4": 0.721, "D5": 0.6284}, {"id": "2125986", "nome": "UBS Petropolis Rosa Capuche", "cidade": "Betim", "cor": "#16a085", "pop": 16012, "ivs": 0.4735, "D1": 0.5049, "D2": null, "D3": 0.5, "D4": 0.2575, "D5": 0.4224}, {"id": "2125994", "nome": "UBS Cachoeira Wilson Oliveira Antunes", "cidade": "Betim", "cor": "#16a085", "pop": 4941, "ivs": 0.5361, "D1": 0.5613, "D2": null, "D3": 0.5, "D4": 0.442, "D5": 0.4614}, {"id": "2126028", "nome": "UBS Alcides Braz", "cidade": "Betim", "cor": "#16a085", "pop": 9885, "ivs": 0.356, "D1": 0.3268, "D2": null, "D3": 0.5, "D4": 0.3451, "D5": 0.4106}, {"id": "2126060", "nome": "UBS Alterosas Antonio Jose Salomao", "cidade": "Betim", "cor": "#16a085", "pop": 26425, "ivs": 0.5337, "D1": 0.5751, "D2": null, "D3": 0.5, "D4": 0.3405, "D5": 0.4405}, {"id": "2126087", "nome": "UBS Dom Bosco Sebastiao Da Silva Viana", "cidade": "Betim", "cor": "#16a085", "pop": 3055, "ivs": 0.4992, "D1": 0.5372, "D2": null, "D3": 0.5, "D4": 0.2864, "D5": 0.3954}, {"id": "2126095", "nome": "UBS Petrovale Eduardo Antonio Rocha", "cidade": "Betim", "cor": "#16a085", "pop": 14196, "ivs": 0.2944, "D1": 0.261, "D2": null, "D3": 0.5, "D4": 0.2185, "D5": 0.4063}, {"id": "2126109", "nome": "UBS Ptb Santa Cruz", "cidade": "Betim", "cor": "#16a085", "pop": 6860, "ivs": 0.6072, "D1": 0.6622, "D2": null, "D3": 0.5, "D4": 0.433, "D5": 0.4632}, {"id": "2126117", "nome": "UBS Vila Bemge Cristovina C G De Souza", "cidade": "Betim", "cor": "#16a085", "pop": 10624, "ivs": 0.6427, "D1": 0.6097, "D2": null, "D3": 0.5, "D4": 1.0, "D5": 0.75}, {"id": "2126141", "nome": "UBS Imbirucu Antonio Sabino De Souza", "cidade": "Betim", "cor": "#16a085", "pop": 13740, "ivs": 0.6262, "D1": 0.6784, "D2": null, "D3": 0.5, "D4": 0.4946, "D5": 0.4772}, {"id": "2126168", "nome": "UBS Vila Cristina", "cidade": "Betim", "cor": "#16a085", "pop": 7037, "ivs": 0.3863, "D1": 0.3531, "D2": null, "D3": 0.5, "D4": 0.4357, "D5": 0.4519}, {"id": "2126176", "nome": "UBS Laranjeiras Antonio Caetano", "cidade": "Betim", "cor": "#16a085", "pop": 7855, "ivs": 0.448, "D1": 0.4631, "D2": null, "D3": 0.5, "D4": 0.2985, "D5": 0.409}, {"id": "2126192", "nome": "UBS Icaivera", "cidade": "Betim", "cor": "#16a085", "pop": 8711, "ivs": 0.707, "D1": 0.7727, "D2": null, "D3": 0.5, "D4": 0.6026, "D5": 0.5177}, {"id": "2126427", "nome": "UBS Alvorada Joao Gregorio Ferreira", "cidade": "Betim", "cor": "#16a085", "pop": 5537, "ivs": 0.5825, "D1": 0.5666, "D2": null, "D3": 0.5, "D4": 0.7859, "D5": 0.5783}, {"id": "2126435", "nome": "UBS Vianopolis Osvaldo Cruz", "cidade": "Betim", "cor": "#16a085", "pop": 4394, "ivs": 0.3941, "D1": 0.3899, "D2": null, "D3": 0.5, "D4": 0.2904, "D5": 0.3848}, {"id": "2894912", "nome": "UBS Sitio Pocoes Terezinha De Jesus Lara Braga", "cidade": "Betim", "cor": "#16a085", "pop": 11951, "ivs": 0.1284, "D1": 0.0686, "D2": null, "D3": 0.5, "D4": 0.0067, "D5": 0.25}, {"id": "3419363", "nome": "UBS Cruzeiro Do Sul", "cidade": "Betim", "cor": "#16a085", "pop": 13079, "ivs": 0.6253, "D1": 0.6768, "D2": null, "D3": 0.5, "D4": 0.4857, "D5": 0.5251}, {"id": "3419371", "nome": "UBS Bandeirinhas Rosa Miguel Salomao", "cidade": "Betim", "cor": "#16a085", "pop": 6654, "ivs": 0.554, "D1": 0.5752, "D2": null, "D3": 0.5, "D4": 0.5017, "D5": 0.5036}, {"id": "3910865", "nome": "UBS Parque Do Cedro Cecilia De Paula Oliveira", "cidade": "Betim", "cor": "#16a085", "pop": 3696, "ivs": 0.781, "D1": 0.8561, "D2": null, "D3": 0.5, "D4": 0.7217, "D5": 0.548}, {"id": "4659031", "nome": "UBS Niteroi", "cidade": "Betim", "cor": "#16a085", "pop": 16779, "ivs": 0.468, "D1": 0.4644, "D2": null, "D3": 0.5, "D4": 0.447, "D5": 0.4813}, {"id": "4702301", "nome": "UBS Sao Joao", "cidade": "Betim", "cor": "#16a085", "pop": 6443, "ivs": 0.6261, "D1": 0.6909, "D2": null, "D3": 0.5, "D4": 0.4169, "D5": 0.4745}, {"id": "4796020", "nome": "UBS Sao Luiz Betim", "cidade": "Betim", "cor": "#16a085", "pop": 6584, "ivs": 0.4948, "D1": 0.5244, "D2": null, "D3": 0.5, "D4": 0.3224, "D5": 0.4162}, {"id": "5128218", "nome": "UBS Colonia", "cidade": "Betim", "cor": "#16a085", "pop": 7031, "ivs": 0.8399, "D1": 0.9223, "D2": null, "D3": 0.5, "D4": 0.792, "D5": 0.6688}, {"id": "5139074", "nome": "UBS Guanabara", "cidade": "Betim", "cor": "#16a085", "pop": 3587, "ivs": 0.4847, "D1": 0.5122, "D2": null, "D3": 0.5, "D4": 0.3082, "D5": 0.4282}, {"id": "5307767", "nome": "UBS Trincheira Neusa Maria Barbizan Ferreira", "cidade": "Betim", "cor": "#16a085", "pop": 11014, "ivs": 0.7393, "D1": 0.7599, "D2": null, "D3": 0.5, "D4": 0.9274, "D5": 0.6675}, {"id": "5320348", "nome": "UBS Caic Capelinha", "cidade": "Betim", "cor": "#16a085", "pop": 9441, "ivs": 0.5703, "D1": 0.5904, "D2": null, "D3": 0.5, "D4": 0.548, "D5": 0.5077}, {"id": "5505844", "nome": "UBS Universal Joao Narcizio De Barros", "cidade": "Betim", "cor": "#16a085", "pop": 12298, "ivs": 0.4087, "D1": 0.412, "D2": null, "D3": 0.5, "D4": 0.2697, "D5": 0.4245}, {"id": "5896002", "nome": "UBS Nova Baden Virginia Maria De Carvalho", "cidade": "Betim", "cor": "#16a085", "pop": 8227, "ivs": 0.3979, "D1": 0.4314, "D2": null, "D3": 0.5, "D4": 0.0404, "D5": 0.4791}, {"id": "6213618", "nome": "UBS Campos Eliseos", "cidade": "Betim", "cor": "#16a085", "pop": 19702, "ivs": 0.6905, "D1": 0.7363, "D2": null, "D3": 0.5, "D4": 0.6757, "D5": 0.5569}, {"id": "6305245", "nome": "UBS Amazonas", "cidade": "Betim", "cor": "#16a085", "pop": 10022, "ivs": 0.4632, "D1": 0.4531, "D2": null, "D3": 0.5, "D4": 0.476, "D5": 0.4806}, {"id": "6409296", "nome": "UBS Paulo Camilo", "cidade": "Betim", "cor": "#16a085", "pop": 6687, "ivs": 0.57, "D1": 0.6094, "D2": null, "D3": 0.5, "D4": 0.4352, "D5": 0.4739}, {"id": "6935699", "nome": "UBS Nossa Senhora De Fatima", "cidade": "Betim", "cor": "#16a085", "pop": 5320, "ivs": 0.7076, "D1": 0.764, "D2": null, "D3": 0.5, "D4": 0.6312, "D5": 0.6388}, {"id": "7130236", "nome": "Betim Centro De Remanejamento Prisional De Betim Ceresp", "cidade": "Betim", "cor": "#16a085", "pop": 2332, "ivs": 0.5366, "D1": 0.5671, "D2": null, "D3": 0.5, "D4": 0.3808, "D5": 0.5789}, {"id": "7924097", "nome": "UBS Duque De Caxias Elias Vieira De Sa", "cidade": "Betim", "cor": "#16a085", "pop": 10024, "ivs": 0.5137, "D1": 0.5719, "D2": null, "D3": 0.5, "D4": 0.1761, "D5": 0.477}, {"id": "9814809", "nome": "UBS Vila Recreio Geni Rosa Dos Santos", "cidade": "Betim", "cor": "#16a085", "pop": 9700, "ivs": 0.1178, "D1": 0.0369, "D2": null, "D3": 0.5, "D4": 0.0995, "D5": 0.3034}, {"id": "9860673", "nome": "UBS Teresopolis Sonia Augusta Dos Santos Silva", "cidade": "Betim", "cor": "#16a085", "pop": 23239, "ivs": 0.795, "D1": 0.8786, "D2": null, "D3": 0.5, "D4": 0.6901, "D5": 0.6009}];
+
+// ── utilidades ──────────────────────────────────────────────────────────────
+function seededRng(seed) {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0xffffffff;
+    return (s >>> 0) / 0xffffffff;
+  };
+}
+
+function shuffle(arr, rng) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function ivsColor(v) {
+  const stops = [[0,'#27ae60'],[0.33,'#f1c40f'],[0.66,'#e67e22'],[1,'#c0392b']];
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [v0, c0] = stops[i], [v1, c1] = stops[i+1];
+    if (v <= v1) {
+      const t = (v - v0) / (v1 - v0);
+      const hex = (c) => parseInt(c.slice(1,3),16)*256*256 + parseInt(c.slice(3,5),16)*256 + parseInt(c.slice(5,7),16);
+      const lerp = (a,b,t) => Math.round(a + t*(b-a));
+      const n0 = hex(c0), n1 = hex(c1);
+      const r = lerp(n0>>16, n1>>16, t);
+      const g = lerp((n0>>8)&0xff, (n1>>8)&0xff, t);
+      const b = lerp(n0&0xff, n1&0xff, t);
+      return `rgb(${r},${g},${b})`;
+    }
+  }
+  return '#c0392b';
+}
+
+function ivsBar(v) {
+  const c = ivsColor(v);
+  const pct = Math.round(v * 100);
+  return `<div class="ivs-bar">
+    <div class="ivs-bg"><div class="ivs-fill" style="width:${pct}%;background:${c}"></div></div>
+    <span class="ivs-val" style="color:${c}">${v.toFixed(3)}</span>
+  </div>`;
+}
+
+function dimMini(u) {
+  return ['D1','D2','D3','D4','D5'].map(d => {
+    const v = u[d];
+    if (v === null || v === undefined) return '';
+    const c = ivsColor(v);
+    return `<span class="dim-pill" style="border-left:3px solid ${c}">${d} ${v.toFixed(2)}</span>`;
+  }).join('');
+}
+
+function fmtPop(p) {
+  return p >= 1000 ? (p/1000).toFixed(1)+'k' : String(p);
+}
+
+// ── Matching ────────────────────────────────────────────────────────────────
+function match(cidades, casos, controles, ratio, tolPop, rng) {
+  const result = {};  // cidade -> {pairs: [], unpairedCasos: [], unpairedControles: []}
+
+  for (const cidade of cidades) {
+    const casosC = shuffle(casos.filter(u => u.cidade === cidade), rng);
+    const controlesC = controles.filter(u => u.cidade === cidade);
+    const used = new Set();
+    const pairs = [];
+    const unpairedCasos = [];
+
+    for (const caso of casosC) {
+      // Candidatos: controles não usados dentro da tolerância populacional
+      let candidatos = controlesC.filter(c => {
+        if (used.has(c.id)) return false;
+        if (caso.pop === 0 || c.pop === 0) return true;
+        const diff = Math.abs(c.pop - caso.pop) / caso.pop;
+        return diff <= tolPop / 100;
+      });
+
+      // Ordenar por proximidade de população
+      candidatos.sort((a, b) =>
+        Math.abs(a.pop - caso.pop) - Math.abs(b.pop - caso.pop)
+      );
+
+      // Adicionar aleatoriedade entre os mais próximos (top 2× ratio)
+      const pool = candidatos.slice(0, ratio * 2);
+      shuffle(pool, rng);
+      const escolhidos = pool.slice(0, ratio);
+
+      if (escolhidos.length === 0) {
+        // sem tolerância: pegar mais próximos globalmente
+        const fallback = controlesC
+          .filter(c => !used.has(c.id))
+          .sort((a,b) => Math.abs(a.pop-caso.pop) - Math.abs(b.pop-caso.pop))
+          .slice(0, ratio);
+        if (fallback.length === 0) {
+          unpairedCasos.push(caso);
+          continue;
+        }
+        fallback.forEach(c => used.add(c.id));
+        pairs.push({ caso, controles: fallback, fallback: true });
+      } else {
+        escolhidos.forEach(c => used.add(c.id));
+        pairs.push({ caso, controles: escolhidos, fallback: false });
+      }
+    }
+
+    const unpairedControles = controlesC.filter(c => !used.has(c.id));
+    result[cidade] = { pairs, unpairedCasos, unpairedControles };
+  }
+  return result;
+}
+
+// ── Render ──────────────────────────────────────────────────────────────────
+let lastResult = null;
+
+function run() {
+  const limCaso     = parseFloat(document.getElementById('limiarCaso').value);
+  const limControle = parseFloat(document.getElementById('limiarControle').value);
+  const ratio       = parseInt(document.getElementById('ratio').value);
+  const tolPop      = parseFloat(document.getElementById('tolPop').value);
+  const seed        = parseInt(document.getElementById('seed').value) || 42;
+  const rng         = seededRng(seed);
+
+  const casos     = UBS_DATA.filter(u => u.ivs >= limCaso);
+  const controles = UBS_DATA.filter(u => u.ivs <= limControle);
+  const cidades   = [...new Set(UBS_DATA.map(u => u.cidade))];
+
+  const resultado = match(cidades, casos, controles, ratio, tolPop, rng);
+  lastResult = { resultado, limCaso, limControle, ratio, tolPop, seed };
+
+  // Stats globais
+  let totalPares = 0, totalCasos = 0, totalCont = 0, totalNPar = 0;
+  for (const c of cidades) {
+    const r = resultado[c];
+    totalPares += r.pairs.length;
+    totalCasos += r.pairs.length + r.unpairedCasos.length;
+    totalCont  += r.pairs.reduce((s,p) => s + p.controles.length, 0);
+    totalNPar  += r.unpairedCasos.length;
+  }
+
+  document.getElementById('statsRow').innerHTML = `
+    <div class="stat-card">
+      <div class="label">Casos elegíveis</div>
+      <div class="value" style="color:#e74c3c">${casos.length}</div>
+      <div class="sub">IVS ≥ ${limCaso.toFixed(2)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Controles elegíveis</div>
+      <div class="value" style="color:#2980b9">${controles.length}</div>
+      <div class="sub">IVS ≤ ${limControle.toFixed(2)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Pares formados</div>
+      <div class="value" style="color:#27ae60">${totalPares}</div>
+      <div class="sub">Razão 1:${ratio} · semente ${seed}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Controles alocados</div>
+      <div class="value" style="color:#27ae60">${totalCont}</div>
+      <div class="sub">${totalNPar} casos sem par</div>
+    </div>`;
+
+  // Tabelas por cidade
+  let html = '';
+  for (const cidade of cidades) {
+    const r = resultado[cidade];
+    const corCidade = UBS_DATA.find(u => u.cidade === cidade)?.cor || '#555';
+    const nCasos = r.pairs.length + r.unpairedCasos.length;
+    const nCont  = r.pairs.reduce((s,p) => s + p.controles.length, 0);
+    const nPar   = r.pairs.length;
+
+    html += `
+    <div class="section-title" style="border-color:${corCidade}">
+      <span class="badge-cidade badge" style="background:${corCidade}">${cidade}</span>
+      &nbsp; ${nPar} pares · ${nCasos} casos · ${nCont} controles alocados
+    </div>
+    <div class="table-wrap" style="margin-bottom:20px">
+      <table>
+        <thead>
+          <tr>
+            <th>Grupo</th>
+            <th>Par #</th>
+            <th>UBS</th>
+            <th>IVS</th>
+            <th>Dimensões</th>
+            <th>Pop. estimada</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+    r.pairs.forEach((p, i) => {
+      const nota = p.fallback ? ' <span title="Fora da tolerância populacional" style="color:#f39c12">⚠</span>' : '';
+      html += renderRow(p.caso, 'caso', i+1);
+      p.controles.forEach(ctrl => {
+        html += renderRow(ctrl, 'controle', i+1, nota);
+      });
+      if (i < r.pairs.length - 1) html += `<tr><td class="pair-sep" colspan="6"></td></tr>`;
+    });
+
+    html += '</tbody></table></div>';
+
+    if (r.unpairedCasos.length > 0) {
+      html += `<p style="font-size:.8em;color:#e74c3c;margin:-12px 0 16px;padding-left:4px">
+        ⚠ ${r.unpairedCasos.length} caso(s) sem controle disponível em ${cidade}:
+        ${r.unpairedCasos.map(u=>'<strong>'+u.nome+'</strong>').join(', ')}
+      </p>`;
+    }
+  }
+
+  document.getElementById('tablesArea').innerHTML = html || '<p class="empty-msg">Nenhum par formado com os critérios atuais.</p>';
+
+  // Controles não usados
+  let unHtml = '<div class="section-title">Controles não alocados</div><div class="unpaired-list">';
+  let anyUn = false;
+  for (const cidade of cidades) {
+    const corCidade = UBS_DATA.find(u => u.cidade === cidade)?.cor || '#555';
+    resultado[cidade].unpairedControles.forEach(u => {
+      anyUn = true;
+      unHtml += `<div class="unpaired-chip">
+        <span class="badge-cidade badge" style="background:${corCidade};font-size:.68em">${cidade}</span>
+        ${u.nome} <span style="color:#7f8c8d">(IVS ${u.ivs.toFixed(3)})</span>
+      </div>`;
+    });
+  }
+  unHtml += '</div>';
+  document.getElementById('unpairedArea').innerHTML = anyUn ? unHtml : '';
+}
+
+function renderRow(u, grupo, par, nota='') {
+  const badge = grupo === 'caso'
+    ? '<span class="badge badge-caso">Caso</span>'
+    : '<span class="badge badge-controle">Controle</span>';
+  return `<tr>
+    <td>${badge}</td>
+    <td style="color:#7f8c8d;font-size:.8em">Par ${par}${nota}</td>
+    <td style="font-weight:500">${u.nome}</td>
+    <td>${ivsBar(u.ivs)}</td>
+    <td><div class="dim-mini">${dimMini(u)}</div></td>
+    <td class="pop-val">~${fmtPop(u.pop)} hab</td>
+  </tr>`;
+}
+
+function randomSeed() {
+  document.getElementById('seed').value = Math.floor(Math.random() * 9000) + 1;
+  run();
+}
+
+function exportCSV() {
+  if (!lastResult) return;
+  const rows = [['Cidade','Par','Grupo','ID_UBS','Nome_UBS','IVS','D1','D2','D3','D4','D5','Pop_estimada']];
+  const cidades = [...new Set(UBS_DATA.map(u => u.cidade))];
+  for (const cidade of cidades) {
+    const r = lastResult.resultado[cidade];
+    r.pairs.forEach((p, i) => {
+      const addRow = (u, grupo) => rows.push([
+        cidade, i+1, grupo, u.id, u.nome,
+        u.ivs, u.D1??'', u.D2??'', u.D3??'', u.D4??'', u.D5??'', u.pop
+      ]);
+      addRow(p.caso, 'caso');
+      p.controles.forEach(c => addRow(c, 'controle'));
+    });
+    r.unpairedCasos.forEach(u => rows.push([
+      cidade, 'sem_par', 'caso', u.id, u.nome,
+      u.ivs, u.D1??'', u.D2??'', u.D3??'', u.D4??'', u.D5??'', u.pop
+    ]));
+  }
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `caso_controle_ivs_semente${lastResult.seed}.csv`;
+  a.click();
+}
+
+// Executar ao carregar
+run();
+</script>
+</body>
+</html>
