@@ -200,15 +200,17 @@ def download_cnes_ubs() -> None:
 
 def download_ubs_shapefile() -> None:
     """
-    Tenta baixar o shapefile de territórios das UBS da API WFS do GeoSampa.
+    Tenta baixar o shapefile de territórios das UBS de Porto Alegre.
 
-    Layer: 'ugeo:ds_ubs_areas' (áreas de abrangência de UBS — SMS POA).
-    Se falhar, gera instruções manuais e um script alternativo com Voronoi.
+    Fontes tentadas (em ordem):
+      1. Portal de Dados Abertos de POA (dadosabertos.poa.br) — grupo Saúde
+      2. GIS-SMAMUS (gis-smamus.portoalegre.rs.gov.br) — ArcGIS REST
+    Se todas falharem, gera instruções manuais e fallback Voronoi.
 
-    GeoSampa WFS:
-    https://geosampa.prefpoa.com.br/geoserver/ugeo/wfs
+    ATENÇÃO: GeoSampa (geosampa.prefpoa.com.br) é o geoportal de São Paulo
+    e NÃO existe em Porto Alegre. O portal correto é o GIS-SMAMUS/SMS-POA.
     """
-    log.info("=== GeoSampa — Territórios das 141 UBS ===")
+    log.info("=== SMS-POA — Territórios das 141 UBS ===")
     dest_dir = RAW / "ubs_territorios"
     dest_dir.mkdir(parents=True, exist_ok=True)
     geojson_dest = dest_dir / "territorios_ubs.geojson"
@@ -217,70 +219,79 @@ def download_ubs_shapefile() -> None:
         log.info("  já existe: %s", geojson_dest.name)
         return
 
-    # Tentativa 1: WFS GeoSampa
-    wfs_url = (
-        "https://geosampa.prefpoa.com.br/geoserver/ugeo/wfs"
-        "?service=WFS&version=2.0.0&request=GetFeature"
-        "&typeName=ugeo:ds_ubs_areas&outputFormat=application/json"
-        "&srsName=EPSG:4674"
-    )
-    layers_to_try = [
-        ("ugeo:ds_ubs_areas",       "areas de abrangencia UBS"),
-        ("ugeo:ubs",                "pontos UBS"),
-        ("smams:areas_risco",       "areas de risco ambiental"),
-    ]
-
     s = _session()
-    for layer, desc in layers_to_try:
-        url = (
-            "https://geosampa.prefpoa.com.br/geoserver/ugeo/wfs"
-            f"?service=WFS&version=2.0.0&request=GetFeature"
-            f"&typeName={layer}&outputFormat=application/json"
-            f"&srsName=EPSG:4674"
-        )
-        out = dest_dir / f"{layer.replace(':', '_')}.geojson"
+
+    # Tentativa 1: Portal Dados Abertos POA — grupo Saúde
+    # Verificar datasets disponíveis em: https://dadosabertos.poa.br/group/saude
+    dados_abertos_urls = [
+        "https://dadosabertos.poa.br/dataset/areas-abrangencia-ubs/resource/territorios-ubs.geojson",
+        "https://dadosabertos.poa.br/dataset/unidades-de-saude/resource/ubs-territorios.geojson",
+    ]
+    for url in dados_abertos_urls:
         try:
-            log.info("  WFS layer: %s (%s)", layer, desc)
+            log.info("  tentando dados abertos POA: %s", url)
+            r = s.get(url, timeout=30)
+            r.raise_for_status()
+            geojson_dest.write_bytes(r.content)
+            log.info("  salvo: %s", geojson_dest.name)
+            return
+        except requests.RequestException as e:
+            log.warning("  falha: %s", e)
+
+    # Tentativa 2: GIS-SMAMUS ArcGIS REST (camadas públicas)
+    # Explorar layers disponíveis: https://gis-smamus.portoalegre.rs.gov.br/server/rest/services
+    smamus_urls = [
+        (
+            "https://gis-smamus.portoalegre.rs.gov.br/server/rest/services/"
+            "01_PUBLICACOES/saude_ubs/MapServer/0/query"
+            "?where=1%3D1&outFields=*&f=geojson&outSR=4674",
+            dest_dir / "smamus_ubs.geojson",
+        ),
+    ]
+    for url, out in smamus_urls:
+        try:
+            log.info("  tentando GIS-SMAMUS: %s", url)
             r = s.get(url, timeout=60)
             r.raise_for_status()
             out.write_bytes(r.content)
             log.info("  salvo: %s (%.1f MB)", out.name, out.stat().st_size / 1e6)
         except requests.RequestException as e:
-            log.warning("  falha WFS %s: %s", layer, e)
-
-    # Tentativa 2: Portal de dados abertos PMPA
-    dados_abertos_urls = [
-        (
-            "https://dadosabertos.poa.br/dataset/unidades-basicas-saude/resource/"
-            "e1e5e9e2-7e3b-4b9e-9c7b-1e0b0e1e9e2e",
-            dest_dir / "ubs_dadosabertos.geojson",
-        ),
-    ]
-    for url, out in dados_abertos_urls:
-        try:
-            r = s.get(url, timeout=30)
-            r.raise_for_status()
-            out.write_bytes(r.content)
-            log.info("  dados abertos salvo: %s", out.name)
-        except requests.RequestException:
-            pass  # silencioso — vai gerar manual abaixo
+            log.warning("  falha GIS-SMAMUS: %s", e)
 
     # Sempre gerar instruções manuais de fallback
     _write_stub(
         dest_dir / "INSTRUCOES_MANUAIS.txt",
-        """Opção A — GeoSampa (navegador):
-  1. Acesse https://geosampa.prefpoa.com.br
-  2. Busque 'UBS' ou 'Unidades Básicas de Saúde'
-  3. Exporte a camada de áreas de abrangência como GeoJSON/Shapefile
+        """FONTES CORRETAS para territórios de UBS em Porto Alegre
+========================================================
+
+Opção A — Portal de Dados Abertos de Porto Alegre:
+  1. Acesse https://dadosabertos.poa.br/group/saude
+  2. Procure dataset "Áreas de Abrangência das UBS" ou "Unidades de Saúde"
+  3. Baixe o arquivo GeoJSON ou Shapefile disponível
   4. Salve em: data/raw/ubs_territorios/territorios_ubs.geojson
 
-Opção B — DATASUS / e-SUS APS:
-  https://egestorab.saude.gov.br/paginas/acesso/login.xhtml
-  Menu: Relatórios > Rede de Saúde > Territórios
+Opção B — GIS-SMAMUS (Portal GIS da Prefeitura de Porto Alegre):
+  1. Acesse https://gis-smamus.portoalegre.rs.gov.br/portal/home/
+  2. Pesquise por "UBS" ou "Saúde" nas camadas públicas
+  3. Exporte como GeoJSON com CRS EPSG:4674 (SIRGAS 2000)
+  4. Salve em: data/raw/ubs_territorios/territorios_ubs.geojson
 
-Opção C — Voronoi pelo CNES (automático):
+Opção C — SMS / Territorialização (contato direto):
+  https://prefeitura.poa.br/sms/bvaps-biblioteca-virtual-de-atencao-primaria-saude/territorializacao
+  Solicitar shapefile ao Comitê de Territorialização em Saúde (CMTS)
+  via protocolo SEI ou e-mail para a SMS-POA.
+
+Opção D — Mapa interativo SMS:
+  https://prefeitura.poa.br/sms/onde-esta-o-aedes/mapas
+  Inspecionar as requisições de rede (DevTools > Network) para
+  capturar a URL da API usada pelo mapa interativo.
+
+Opção E — Voronoi pelo CNES (automático, sem shapefile oficial):
   Execute: python src/gerar_voronoi_ubs.py
-  Isso gera territórios aproximados a partir dos pontos geocodificados do CNES.
+  Gera territórios aproximados a partir dos pontos geocodificados do CNES.
+  Ativar com: python src/calcular_ivs.py --voronoi
+
+ATENÇÃO: "GeoSampa" é o geoportal de SÃO PAULO e não existe em Porto Alegre.
 
 Formato esperado:
   Arquivo GeoJSON com CRS EPSG:4674 (SIRGAS 2000)
