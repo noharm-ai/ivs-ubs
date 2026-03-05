@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>IVSaúde</title>
+<meta name="description" content="Índice de Vulnerabilidade em Saúde por território de UBS">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f3f7;color:#222;line-height:1.6}
+.hero{background:linear-gradient(135deg,#1a3a5c,#1a5276,#2471a3);color:#fff;padding:56px 48px 48px;text-align:center}
+.hero h1{font-size:2.4em;font-weight:800;letter-spacing:-.01em}
+.hero p{font-size:1.1em;opacity:.88;max-width:640px;margin:10px auto 0}
+.hero .sub{margin-top:14px;font-size:.88em;opacity:.7}
+.badges{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:18px}
+.badge{border-radius:20px;padding:4px 16px;font-size:.82em;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35)}
+.container{max-width:1140px;margin:0 auto;padding:44px 22px}
+.section-title{font-size:1.1em;font-weight:700;color:#1a5276;text-transform:uppercase;letter-spacing:.06em;margin-bottom:20px;padding-bottom:8px;border-bottom:2px solid #2980b9}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;margin-bottom:44px}
+.stat{background:#fff;border-radius:10px;padding:18px 14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.07)}
+.stat-val{font-size:2em;font-weight:800;color:#1a5276}
+.stat-lbl{font-size:.78em;color:#666;margin-top:3px}
+.classes{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:44px}
+.cls{flex:1;min-width:120px;border-radius:8px;padding:14px;text-align:center;color:#fff}
+.cls-lbl{font-size:.78em;font-weight:600;opacity:.9}
+.cls-val{font-size:1.8em;font-weight:800}
+.cls-range{font-size:.75em;opacity:.8;margin-top:2px}
+#map{height:520px;border-radius:12px;box-shadow:0 3px 12px rgba(0,0,0,.12);margin-bottom:44px}
+.table-wrap{overflow-x:auto;margin-bottom:44px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.07)}
+th{background:#1a5276;color:#fff;padding:10px 12px;font-size:.82em;text-align:left;position:sticky;top:0}
+td{padding:8px 12px;font-size:.84em;border-bottom:1px solid #eee}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#f4f8fc}
+.legend{background:#fff;padding:14px 18px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.legend-title{font-weight:700;font-size:.88em;margin-bottom:8px}
+.legend-bar{height:14px;border-radius:4px;background:linear-gradient(to right,#27ae60,#f1c40f,#e67e22,#c0392b);margin-bottom:4px}
+.legend-labels{display:flex;justify-content:space-between;font-size:.75em;color:#555}
+.method{background:#fff;border-radius:10px;padding:26px 28px;margin-bottom:44px;box-shadow:0 2px 8px rgba(0,0,0,.07)}
+.method p{font-size:.9em;color:#444;line-height:1.6;margin-bottom:8px}
+.method ul{padding-left:20px;font-size:.88em;color:#555;line-height:1.8}
+footer{text-align:center;font-size:.8em;color:#aaa;padding:28px 0 20px;border-top:1px solid #e3e8ee;margin-top:12px}
+footer a{color:#2980b9;text-decoration:none}
+@media(max-width:600px){.hero{padding:36px 22px 32px}.hero h1{font-size:1.7em}}
+.site-nav{background:#0f3460;display:flex;gap:4px;padding:8px 16px;flex-wrap:wrap;align-items:center}
+.site-nav .nav-brand{color:#7fb3d3;font-size:.78em;font-weight:600;margin-right:8px;letter-spacing:.05em;text-transform:uppercase}
+.site-nav a{color:#b8d4f0;text-decoration:none;padding:5px 12px;border-radius:4px;font-size:.82em;font-weight:500;transition:background .15s;white-space:nowrap}
+.site-nav a:hover{background:rgba(255,255,255,.15);color:#fff}
+.site-nav .nav-current{color:#fff;padding:5px 12px;font-size:.82em;font-weight:700}
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <span class="nav-brand">IVSaúde</span>
+  <a href="index.html">&#8592; Municípios</a>
+  <span class="nav-current" id="nav-current"></span>
+</nav>
+
+<div id="app">
+  <div style="padding:80px;text-align:center;color:#666;font-size:1.1em">Carregando dados...</div>
+</div>
+
+<script>
+const CORES = [[0,'#27ae60'],[0.33,'#f1c40f'],[0.66,'#e67e22'],[1,'#c0392b']];
+
+function ivsColor(v) {
+  for (let i = 0; i < CORES.length - 1; i++) {
+    const [v0, c0] = CORES[i], [v1, c1] = CORES[i + 1];
+    if (v <= v1) {
+      const t = (v - v0) / (v1 - v0);
+      const h = s => parseInt(s, 16);
+      const lerp = (a, b) => Math.round(h(a) + t * (h(b) - h(a)));
+      const r = lerp(c0.slice(1,3), c1.slice(1,3));
+      const g = lerp(c0.slice(3,5), c1.slice(3,5));
+      const b = lerp(c0.slice(5,7), c1.slice(5,7));
+      return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+    }
+  }
+  return '#c0392b';
+}
+
+function dimBar(v) {
+  if (v == null) return '<span style="color:#bbb;font-size:.8em">n/d</span>';
+  const cor = ivsColor(v);
+  const pct = Math.round(v * 100);
+  return `<div style="display:flex;align-items:center;gap:5px">` +
+    `<div style="flex:1;height:6px;border-radius:3px;background:#e8edf2">` +
+    `<div style="width:${pct}%;height:100%;border-radius:3px;background:${cor}"></div></div>` +
+    `<span style="min-width:32px;text-align:right;font-size:.82em">${v.toFixed(2)}</span></div>`;
+}
+
+function classBadge(cls, cor) {
+  return `<span style="background:${cor};color:#fff;border-radius:4px;padding:2px 8px;font-size:.8em;font-weight:700">${cls}</span>`;
+}
+
+function fmt(v, decimals=1) {
+  return v != null ? v.toFixed(decimals) : '—';
+}
+
+function fmtPop(v) {
+  return v != null ? v.toLocaleString('pt-BR') : '—';
+}
+
+function buildTableRows(tabela) {
+  return tabela.map(r => {
+    const nome = r.nome_ubs.replace(/^UBS\s+/i, '').replace(/\b\w/g, c => c.toUpperCase());
+    return `<tr>
+      <td style="font-weight:600;color:#1a3a5c">${nome}</td>
+      <td style="text-align:right">${fmtPop(r.pop_total)}</td>
+      <td>${dimBar(r.D1)}</td>
+      <td>${dimBar(r.D2)}</td>
+      <td>${dimBar(r.D3)}</td>
+      <td>${dimBar(r.D4)}</td>
+      <td>${dimBar(r.D5)}</td>
+      <td>${dimBar(r.ivs)}</td>
+      <td style="text-align:center">${classBadge(r.classe, r.cor)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPage(meta, geojson, tabela) {
+  const m = meta;
+  const n = m.n_indicadores || 12;
+
+  document.getElementById('nav-current').textContent = `🗺 ${m.nome}`;
+  document.title = `IVSaúde ${m.nome}`;
+
+  document.getElementById('app').innerHTML = `
+<div class="hero">
+  <h1>IVSaúde ${m.nome}</h1>
+  <p>Índice de Vulnerabilidade em Saúde dos Territórios das Unidades Básicas de Saúde</p>
+  <p class="sub">Dados IBGE Censo ${m.ano_censo} · Metodologia Determinantes Sociais da Saúde (Dahlgren &amp; Whitehead, 1991)</p>
+  <div class="badges">
+    <span class="badge">${m.n_ubs} UBS</span>
+    <span class="badge">${n} Indicadores</span>
+    <span class="badge">Territórios Voronoi</span>
+    <span class="badge">Censo ${m.ano_censo} + OpenStreetMap</span>
+    <span class="badge">⚠ IVS — 5 dimensões</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="section-title">Resumo — ${m.nome}${m.uf ? ' ('+m.uf+')' : ''} (Censo IBGE ${m.ano_censo})</div>
+  <div class="stats-grid">
+    <div class="stat"><div class="stat-val">${m.n_ubs}</div><div class="stat-lbl">UBS avaliadas</div></div>
+    <div class="stat"><div class="stat-val">${fmt(m.ivs_medio,3)}</div><div class="stat-lbl">IVS médio</div></div>
+    <div class="stat"><div class="stat-val">${fmt(m.ivs_max,3)}</div><div class="stat-lbl">IVS máximo</div></div>
+    <div class="stat"><div class="stat-val">${fmt(m.ivs_min,3)}</div><div class="stat-lbl">IVS mínimo</div></div>
+    ${m.mean_sem_saneam != null ? `<div class="stat"><div class="stat-val">${fmt(m.mean_sem_saneam)}%</div><div class="stat-lbl">Média sem saneamento</div></div>` : ''}
+    ${m.mean_analf != null ? `<div class="stat"><div class="stat-val">${fmt(m.mean_analf)}%</div><div class="stat-lbl">Média analfabetismo 15+</div></div>` : ''}
+  </div>
+
+  <div class="section-title">Distribuição por Classe (IVS)</div>
+  <div class="classes">
+    <div class="cls" style="background:#27ae60">
+      <div class="cls-lbl">Baixa</div>
+      <div class="cls-val">${m.n_baixa}</div>
+      <div class="cls-range">&lt; 0,33 · ${Math.round(m.n_baixa/m.n_ubs*100)}%</div>
+    </div>
+    <div class="cls" style="background:#e67e22">
+      <div class="cls-lbl">Média</div>
+      <div class="cls-val">${m.n_media}</div>
+      <div class="cls-range">0,33 – 0,66 · ${Math.round(m.n_media/m.n_ubs*100)}%</div>
+    </div>
+    <div class="cls" style="background:#c0392b">
+      <div class="cls-lbl">Alta</div>
+      <div class="cls-val">${m.n_alta}</div>
+      <div class="cls-range">≥ 0,66 · ${Math.round(m.n_alta/m.n_ubs*100)}%</div>
+    </div>
+  </div>
+
+  <div class="section-title">Mapa Interativo — IVS por Território de UBS</div>
+  <div id="map"></div>
+
+  <div class="section-title">Indicadores por UBS (ordenado por vulnerabilidade)</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>UBS</th>
+          <th style="text-align:right">Pop. estimada</th>
+          <th title="D1 — Condição Socioeconômica">D1 <span style="font-weight:400;opacity:.7;font-size:.85em">Socioecon.</span></th>
+          <th title="D2 — Habitação e Saneamento">D2 <span style="font-weight:400;opacity:.7;font-size:.85em">Habitação</span></th>
+          <th title="D3 — Capital Social">D3 <span style="font-weight:400;opacity:.7;font-size:.85em">Capital Social</span></th>
+          <th title="D4 — Saúde Adolescente">D4 <span style="font-weight:400;opacity:.7;font-size:.85em">Saúde Adol.</span></th>
+          <th title="D5 — Perfil Demográfico">D5 <span style="font-weight:400;opacity:.7;font-size:.85em">Demográfico</span></th>
+          <th title="IVS — D1×50% + D2×30% + D3×10% + D4×8% + D5×2%">IVS</th>
+          <th>Classe</th>
+        </tr>
+      </thead>
+      <tbody id="table-body">
+        ${buildTableRows(tabela)}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-title">Metodologia</div>
+  <div class="method">
+    <p><strong>IVS</strong> — calculado com ${n} indicadores, agrupados em 5 dimensões com pesos diferenciados (D1=50%, D2=30%, D3=10%, D4=8%, D5=2%):</p>
+    <ul>
+      <li><strong>D1 — Condição Socioeconômica:</strong> % analfabetismo 15+, % população preta+parda <em>(Censo IBGE ${m.ano_censo})</em></li>
+      <li><strong>D2 — Habitação e Saneamento:</strong> % domicílios sem saneamento adequado, % sem coleta de lixo, % crianças 0-3 fora da creche, % crianças 5-14 fora do fundamental <em>(Censo IBGE ${m.ano_censo} + Censo Escolar INEP)</em></li>
+      <li><strong>D3 — Capital Social:</strong> entidades comunitárias por 1.000 hab (INVERSO: mais = menos vulnerável) <em>(OpenStreetMap 2025)</em></li>
+      <li><strong>D4 — Saúde do Adolescente:</strong> % femininas 10-19 anos (proxy de risco para maternidade adolescente) <em>(Censo IBGE ${m.ano_censo})</em></li>
+      <li><strong>D5 — Perfil Demográfico:</strong> % crianças &lt;1 ano (proxy 0-4/5), % adolescentes 10-19, % mulheres 10-49, % idosos 60+ <em>(Censo IBGE ${m.ano_censo})</em></li>
+    </ul>
+    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro do município. D3 é invertido (maior densidade de OSC = menor vulnerabilidade). Territórios definidos por diagrama de Voronoi a partir dos pontos CNES.</p>
+    <p style="margin-top:8px;color:#888;font-size:.85em">Gerado em: ${m.gerado_em}</p>
+  </div>
+
+</div>
+
+<footer>
+  IVSaúde ${m.nome} · <a href="https://github.com/noharm-ai/ivs-ubs">github.com/noharm-ai/ivs-ubs</a>
+  · IBGE Censo ${m.ano_censo} · Pipeline open-source
+</footer>`;
+
+  // Inicializa mapa Leaflet após injetar HTML
+  const map = L.map('map').setView([-14.24, -51.93], 4);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    maxZoom: 18
+  }).addTo(map);
+
+  const info = L.control({position: 'topright'});
+  info.onAdd = function() {
+    this._div = L.DomUtil.create('div', 'legend');
+    this._div.innerHTML = '<div class="legend-title">IVS</div>' +
+      '<div class="legend-bar"></div>' +
+      '<div class="legend-labels"><span>Baixo</span><span>Alto</span></div>';
+    return this._div;
+  };
+  info.addTo(map);
+
+  let selectedLayer = null;
+  const geojsonLayer = L.geoJSON(geojson, {
+    style: f => ({fillColor: f.properties.cor || '#999', weight: 1, opacity: 0.8, color: '#fff', fillOpacity: 0.75}),
+    onEachFeature: (feature, layer) => {
+      layer.on({
+        mouseover: e => e.target.setStyle({weight: 3, color: '#333', fillOpacity: 0.9}),
+        mouseout:  e => { if (selectedLayer !== e.target) geojsonLayer.resetStyle(e.target); },
+        click: e => {
+          if (selectedLayer) geojsonLayer.resetStyle(selectedLayer);
+          selectedLayer = e.target;
+          const p = e.target.feature.properties;
+          L.popup()
+            .setLatLng(e.latlng)
+            .setContent(`<b>${p.nome}</b><br>IVS: <b>${p.ivs}</b><br>Sem saneamento: <b>${p.sem_saneam}%</b><br>Analfabetismo 15+: <b>${p.analf}%</b>`)
+            .openOn(map);
+        }
+      });
+    }
+  }).addTo(map);
+
+  map.fitBounds(geojsonLayer.getBounds());
+}
+
+async function init() {
+  const slug = new URLSearchParams(location.search).get('m');
+  if (!slug) {
+    location.href = 'index.html';
+    return;
+  }
+
+  let data;
+  try {
+    const resp = await fetch(`data/${slug}.json`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    data = await resp.json();
+  } catch (e) {
+    document.getElementById('app').innerHTML =
+      `<div style="padding:80px;text-align:center">` +
+      `<p style="color:#c0392b;font-size:1.1em;margin-bottom:16px">Dados de "<strong>${slug}</strong>" não encontrados.</p>` +
+      `<p style="color:#666;font-size:.9em;margin-bottom:24px">Execute o pipeline para gerar <code>data/${slug}.json</code>:</p>` +
+      `<pre style="display:inline-block;background:#f4f4f4;padding:12px 20px;border-radius:6px;font-size:.85em;text-align:left">` +
+      `python src/gerar_pagina_municipio.py --slug ${slug} --cidade Nome --uf UF</pre>` +
+      `<p style="margin-top:24px"><a href="index.html" style="color:#2980b9">&#8592; Voltar para municípios</a></p>` +
+      `</div>`;
+    return;
+  }
+
+  renderPage(data.meta, data.geojson, data.tabela);
+}
+
+init();
+</script>
+</body>
+</html>
