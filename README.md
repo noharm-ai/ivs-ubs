@@ -84,7 +84,7 @@ python src/gerar_pagina_municipio.py
 3. Normalização min-max por indicador no intervalo `[0,1]`.
 4. Inversão de indicadores protetivos (D3).
 5. Score por dimensão: média simples dos indicadores da dimensão.
-6. IVS parcial: média ponderada das dimensões.
+6. IVS: média ponderada das dimensões.
 
 ### Fórmulas principais
 
@@ -101,7 +101,7 @@ Normalização:
 score = (valor - min) / (max - min)
 ```
 
-IVS parcial:
+IVS:
 
 ```text
 IVS = D1×0,20 + D2×0,20 + D3×0,20 + D4×0,20 + D5×0,20

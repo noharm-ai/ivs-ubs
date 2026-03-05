@@ -299,7 +299,7 @@ def build_html(df_m: pd.DataFrame, corr_geral: dict, corr_dim: dict) -> str:
 <div class="container">
 
   <!-- Cards de correlação geral -->
-  <div class="section-title">Correlação Global — IVS Parcial</div>
+  <div class="section-title">Correlação Global — IVS</div>
   <div class="cards-row">
     <div class="card">
       <div class="card-label">Pearson r</div>

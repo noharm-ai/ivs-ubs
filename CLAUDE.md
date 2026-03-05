@@ -181,7 +181,7 @@ Aplicada por indicador, dentro do universo de Pelotas.
 Média simples dos indicadores normalizados da dimensão.
 D3 é invertido: `score_D3 = 1 − normalizar_mm(D3_osc_per1k)`
 
-### 4. IVS Parcial
+### 4. IVS
 ```
 IVS = (D1 × 0,50 + D2 × 0,30 + D3 × 0,10 + D4 × 0,08 + D5 × 0,02)
 ```

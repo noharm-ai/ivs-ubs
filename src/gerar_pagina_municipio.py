@@ -81,7 +81,7 @@ def normalizar_mm(serie: pd.Series) -> pd.Series:
 
 def calcular_dimensoes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula scores por dimensão (D1-D5) e IVS parcial.
+    Calcula scores por dimensão (D1-D5) e IVS.
     Cada score é a média normalizada [0,1] dos indicadores disponíveis na dimensão.
     Indicadores em INDICADORES_INVERSOS são invertidos (mais = menos vulnerável).
     """
@@ -271,7 +271,7 @@ footer a{{color:#2980b9;text-decoration:none}}
     <span class="badge">{len(INDICADORES)} Indicadores</span>
     <span class="badge">Territórios Voronoi</span>
     <span class="badge">Censo 2022 + OpenStreetMap</span>
-    <span class="badge">⚠ IVS Parcial — 5 dimensões</span>
+    <span class="badge">⚠ IVS — 5 dimensões</span>
   </div>
 </div>
 
@@ -287,7 +287,7 @@ footer a{{color:#2980b9;text-decoration:none}}
     <div class="stat"><div class="stat-val">{round(df['D1_analf'].mean(),1)}%</div><div class="stat-lbl">Média analfabetismo 15+</div></div>
   </div>
 
-  <div class="section-title">Distribuição por Classe (IVS Parcial)</div>
+  <div class="section-title">Distribuição por Classe (IVS)</div>
   <div class="classes">
     <div class="cls" style="background:#27ae60">
       <div class="cls-lbl">Baixa</div>
@@ -321,7 +321,7 @@ footer a{{color:#2980b9;text-decoration:none}}
           <th title="D3 — Capital Social (entidades comunitárias OSM por 1.000 hab)">D3 <span style="font-weight:400;opacity:.7;font-size:.85em">Capital Social</span></th>
           <th title="D4 — Saúde Adolescente (% femininas 10-19 anos, proxy mães adolescentes)">D4 <span style="font-weight:400;opacity:.7;font-size:.85em">Saúde Adol.</span></th>
           <th title="D5 — Perfil Demográfico (faixas etárias)">D5 <span style="font-weight:400;opacity:.7;font-size:.85em">Demográfico</span></th>
-          <th title="IVS Parcial — D1×50% + D2×30% + D3×10% + D4×8% + D5×2%">IVS Parcial</th>
+          <th title="IVS — D1×50% + D2×30% + D3×10% + D4×8% + D5×2%">IVS</th>
           <th>Classe</th>
         </tr>
       </thead>
@@ -333,7 +333,7 @@ footer a{{color:#2980b9;text-decoration:none}}
 
   <div class="section-title">Metodologia</div>
   <div class="method">
-    <p><strong>IVS Parcial</strong> — calculado com {len(INDICADORES)} indicadores, agrupados em 5 dimensões com pesos diferenciados (D1=50%, D2=30%, D3=10%, D4=8%, D5=2%):</p>
+    <p><strong>IVS</strong> — calculado com {len(INDICADORES)} indicadores, agrupados em 5 dimensões com pesos diferenciados (D1=50%, D2=30%, D3=10%, D4=8%, D5=2%):</p>
     <ul>
       <li><strong>D1 — Condição Socioeconômica:</strong> % analfabetismo 15+, % população preta+parda <em>(Censo IBGE 2022)</em></li>
       <li><strong>D2 — Habitação e Saneamento:</strong> % domicílios sem saneamento adequado, % sem coleta de lixo, % crianças 0-3 fora da creche, % crianças 5-14 fora do fundamental <em>(Censo IBGE 2022 + Censo Escolar INEP)</em></li>
@@ -375,7 +375,7 @@ function style(feature) {{
 const info = L.control({{position: 'topright'}});
 info.onAdd = function() {{
   this._div = L.DomUtil.create('div', 'legend');
-  this._div.innerHTML = '<div class="legend-title">IVS Parcial</div>'
+  this._div.innerHTML = '<div class="legend-title">IVS</div>'
     + '<div class="legend-bar"></div>'
     + '<div class="legend-labels"><span>Baixo</span><span>Alto</span></div>';
   return this._div;
@@ -393,7 +393,7 @@ function selectFeature(e) {{
   if (selectedLayer) geojsonLayer.resetStyle(selectedLayer);
   selectedLayer = e.target;
   const p = e.target.feature.properties;
-  const popup = `<b>${{p.nome}}</b><br>IVS Parcial: <b>${{p.ivs}}</b><br>Sem saneamento: <b>${{p.sem_saneam}}%</b><br>Analfabetismo 15+: <b>${{p.analf}}%</b>`;
+  const popup = `<b>${{p.nome}}</b><br>IVS: <b>${{p.ivs}}</b><br>Sem saneamento: <b>${{p.sem_saneam}}%</b><br>Analfabetismo 15+: <b>${{p.analf}}%</b>`;
   L.popup().setLatLng(e.latlng).setContent(popup).openOn(map);
 }}
 
@@ -439,7 +439,7 @@ def main():
     geojson_path = PROC / "territorios_voronoi_ubs.geojson"
     geojson_str = geojson_path.read_text(encoding="utf-8")
 
-    log.info("Calculando scores por dimensão e IVS parcial...")
+    log.info("Calculando scores por dimensão e IVS...")
     dim_df = calcular_dimensoes(df)
     df = df.join(dim_df)
 
