@@ -122,19 +122,19 @@ python src/gerar_pagina_municipio.py
 
 ## Dimensões e indicadores implementados
 
-### D1 — Condição Socioeconômica (peso 20%)
+### D1 — Condição Socioeconômica (peso 50%)
 | Indicador | Fórmula | Fonte |
 |-----------|---------|-------|
 | `D1_analf` | V00901 / (V00900 + V00901) × 100 | IBGE Censo 2022 |
 | `D1_negros` | (V01318 + V01320) / V01006 × 100 | IBGE Censo 2022 |
 
-### D2 — Habitação e Saneamento (peso 20%)
+### D2 — Habitação e Saneamento (peso 30%)
 | Indicador | Fórmula | Fonte |
 |-----------|---------|-------|
 | `D2_sem_saneam` | (V00001 − V00309 − V00310) / V00001 × 100 | IBGE Censo 2022 |
 | `D2_sem_lixo` | (V00001 − V00397 − V00398) / V00001 × 100 | IBGE Censo 2022 |
 
-### D3 — Capital Social (peso 20%) — INVERSO
+### D3 — Capital Social (peso 10%) — INVERSO
 | Indicador | Fórmula | Fonte |
 |-----------|---------|-------|
 | `D3_osc_per1k` | count_osc_no_território / pop_total × 1000 | OpenStreetMap via Overpass API |
@@ -143,7 +143,7 @@ python src/gerar_pagina_municipio.py
 - 43 pontos georeferenciados; 22 dos 55 territórios com ao menos 1 entidade
 - **Normalização invertida**: 1 − normalizar_mm(D3_osc_per1k) → mais OSC = menos vulnerável
 
-### D4 — Saúde do Adolescente (peso 20%)
+### D4 — Saúde do Adolescente (peso 8%)
 | Indicador | Fórmula | Fonte |
 |-----------|---------|-------|
 | `D4_adol_fem` | (V01022 + V01023) / V01006 × 100 | IBGE Censo 2022 |
@@ -152,7 +152,7 @@ python src/gerar_pagina_municipio.py
 - SINASC 2022 confirma 7,9% das mães em Pelotas têm ≤19 anos (344/4.369 nascidos)
 - Sem CEP individual no DataSUS público → variação espacial vem do Censo
 
-### D5 — Perfil Demográfico (peso 20%)
+### D5 — Perfil Demográfico (peso 2%)
 | Indicador | Fórmula | Fonte |
 |-----------|---------|-------|
 | `D5_menor1` | (V01031 / 5) / V01006 × 100 | IBGE Censo 2022 |
@@ -183,8 +183,7 @@ D3 é invertido: `score_D3 = 1 − normalizar_mm(D3_osc_per1k)`
 
 ### 4. IVS Parcial
 ```
-IVS = (D1 × 0,20 + D2 × 0,20 + D3 × 0,20 + D4 × 0,20 + D5 × 0,20)
-    = média simples(D1, D2, D3, D4, D5)
+IVS = (D1 × 0,50 + D2 × 0,30 + D3 × 0,10 + D4 × 0,08 + D5 × 0,02)
 ```
 
 ### Classes de vulnerabilidade
