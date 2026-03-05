@@ -23,8 +23,8 @@ ivs-ubs/
 ├── src/
 │   ├── calcular_ivs_municipio.py     # pipeline principal: IBGE + OSM → ivs_municipio.csv
 │   ├── gerar_pagina_municipio.py     # gera index.html (Leaflet + tabela D1-D5)
-│   ├── gerar_voronoi_ubs.py        # gera territorios_voronoi_ubs.geojson
-│   ├── download_shapefiles.py      # download automatizado (IBGE, CNES, SIM, etc.)
+│   ├── gerar_voronoi.py            # gera territorios_voronoi_ubs.geojson
+│   ├── download_municipio.py       # download automatizado (IBGE, CNES, SIM, etc.)
 │   ├── download_sinasc.py          # download SINASC via pysus
 │   └── download_sim.py             # download SIM via pysus
 │
@@ -59,7 +59,7 @@ ivs-ubs/
 source .venv/bin/activate
 
 # 1. Gerar territórios Voronoi (se necessário)
-python src/gerar_voronoi_ubs.py
+python src/gerar_voronoi.py
 
 # 2. Calcular indicadores (IBGE + OSM → CSV)
 python src/calcular_ivs_municipio.py
