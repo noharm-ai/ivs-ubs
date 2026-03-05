@@ -89,7 +89,10 @@ def calcular_dimensoes(df: pd.DataFrame) -> pd.DataFrame:
     for col, (dim, *_) in INDICADORES.items():
         if col not in df.columns:
             continue
-        norm = normalizar_mm(df[col].fillna(df[col].median()))
+        med = df[col].median()
+        if pd.isna(med):
+            continue  # coluna toda NaN — ignorar indicador
+        norm = normalizar_mm(df[col].fillna(med))
         if col in INDICADORES_INVERSOS:
             norm = 1 - norm
         dim_scores.setdefault(dim, []).append(norm)
