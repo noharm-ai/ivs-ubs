@@ -44,9 +44,16 @@ tr:hover td{background:#f4f8fc}
 footer{text-align:center;font-size:.8em;color:#aaa;padding:28px 0 20px;border-top:1px solid #e3e8ee;margin-top:12px}
 footer a{color:#2980b9;text-decoration:none}
 @media(max-width:600px){.hero{padding:36px 22px 32px}.hero h1{font-size:1.7em}}
+.site-nav{background:#0f3460;display:flex;gap:4px;padding:8px 16px;flex-wrap:wrap;align-items:center}
+.site-nav .nav-brand{color:#7fb3d3;font-size:.78em;font-weight:600;margin-right:8px;letter-spacing:.05em;text-transform:uppercase}
+.site-nav a{color:#b8d4f0;text-decoration:none;padding:5px 12px;border-radius:4px;font-size:.82em;font-weight:500;transition:background .15s;white-space:nowrap}
+.site-nav a:hover{background:rgba(255,255,255,.15);color:#fff}
+.site-nav a.active{background:rgba(255,255,255,.22);color:#fff;font-weight:700}
 </style>
 </head>
 <body>
+<nav class="site-nav"><span class="nav-brand">IVSaúde</span><a href="index.html" class="active">🗺 Pelotas</a><a href="index-poa.html">🗺 Porto Alegre</a><a href="index-betim.html">🗺 Betim</a><a href="comparacao-ivs-poa.html">📊 Validação POA</a><a href="caso-controle.html">🔬 Caso-Controle</a></nav>
+
 
 <div class="hero">
   <h1>IVSaúde Pelotas</h1>
