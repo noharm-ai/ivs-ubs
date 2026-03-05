@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT_HTML = ROOT / "caso-controle.html"
 
 MUNICIPIOS = [
-    {"slug": "poa", "cidade": "Porto Alegre", "cor": "#2980b9"},
+    {"slug": "poa", "cidade": "Porto Alegre", "cor": "#d4ac0d"},
     {"slug": "pelotas", "cidade": "Pelotas", "cor": "#8e44ad"},
     {"slug": "betim", "cidade": "Betim", "cor": "#16a085"},
 ]
@@ -358,7 +358,7 @@ td {{ padding: 7px 10px; border-bottom: 1px solid #ecf0f1; vertical-align: middl
   <div class="legend-box">
     <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Grupo intervencao</div>
     <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Grupo controle</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Porto Alegre</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#d4ac0d"></div> Porto Alegre</div>
     <div class="legend-item"><div class="legend-dot" style="background:#8e44ad"></div> Pelotas</div>
     <div class="legend-item"><div class="legend-dot" style="background:#16a085"></div> Betim</div>
   </div>
