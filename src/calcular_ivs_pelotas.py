@@ -1,18 +1,12 @@
 """
 calcular_ivs_pelotas.py
 =======================
-Agrega dados do Censo IBGE 2022 (por setor censitário) para os 55 territórios
-Voronoi das UBS de Pelotas.
-
-Saídas:
-    ivs_pelotas/data/processed/ibge_por_ubs.csv   — indicadores IBGE por UBS
-    ivs_pelotas/data/processed/ivs_pelotas.csv    — IVS final por UBS
-
-Uso:
-    python src/calcular_ivs_pelotas.py
+Agrega dados do Censo IBGE 2022 (por setor censitário) para territórios
+Voronoi de UBS do município configurado.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import warnings
@@ -36,7 +30,10 @@ log = logging.getLogger(__name__)
 # Caminhos
 # ---------------------------------------------------------------------------
 
-BASE = Path(__file__).resolve().parents[1] / "ivs_pelotas"
+DEFAULT_BASE = Path(__file__).resolve().parents[1] / "ivs_pelotas"
+DEFAULT_SLUG = "pelotas"
+
+BASE = DEFAULT_BASE
 RAW = BASE / "data" / "raw"
 PROC = BASE / "data" / "processed"
 PROC.mkdir(parents=True, exist_ok=True)
@@ -45,6 +42,7 @@ IBGE_DIR = RAW / "ibge_universo"
 SETOR_GEO = RAW / "ibge_setores" / "setores_pelotas.geojson"
 VORONOI = PROC / "territorios_voronoi_ubs.geojson"
 OSC_FILE = RAW / "osc_pelotas_osm.json"
+IVS_OUT_NAME = "ivs_pelotas.csv"
 
 CRS_GEO = "EPSG:4674"
 CRS_UTM = "EPSG:32722"   # UTM 22S — cálculo de áreas
@@ -100,6 +98,41 @@ COR_COLS   = ["CD_setor", "V01318", "V01320"]  # preta + parda
 BAS_COLS   = ["CD_SETOR", "v0001"]
 
 
+def _configure_runtime(base_dir: Path, slug: str) -> None:
+    global BASE, RAW, PROC, IBGE_DIR, SETOR_GEO, VORONOI, OSC_FILE, IVS_OUT_NAME
+    BASE = base_dir.resolve()
+    RAW = BASE / "data" / "raw"
+    PROC = BASE / "data" / "processed"
+    PROC.mkdir(parents=True, exist_ok=True)
+    IBGE_DIR = RAW / "ibge_universo"
+    SETOR_GEO = RAW / "ibge_setores" / f"setores_{slug}.geojson"
+    VORONOI = PROC / "territorios_voronoi_ubs.geojson"
+    OSC_FILE = RAW / f"osc_{slug}_osm.json"
+    IVS_OUT_NAME = f"ivs_{slug}.csv"
+
+
+def _resolve_existing_file(candidates: list[Path], label: str) -> Path:
+    for p in candidates:
+        if p.exists():
+            return p
+    raise FileNotFoundError(f"{label} não encontrado. Candidatos: {', '.join(x.name for x in candidates)}")
+
+
+def _resolve_optional_file(candidates: list[Path]) -> Path | None:
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _read_ibge_optional(candidates: list[Path], cols: list[str], label: str) -> pd.DataFrame:
+    path = _resolve_optional_file(candidates)
+    if path is None:
+        log.warning("  %s não encontrado; colunas serão NaN", label)
+        return pd.DataFrame(columns=cols)
+    return _read_ibge(path, cols)
+
+
 def _read_ibge(path: Path, cols: list[str], na_values=("X",)) -> pd.DataFrame:
     """Lê CSV IBGE filtrando apenas as colunas necessárias."""
     df = pd.read_csv(path, na_values=list(na_values), low_memory=False, dtype=str)
@@ -124,11 +157,24 @@ def _read_ibge(path: Path, cols: list[str], na_values=("X",)) -> pd.DataFrame:
 
 def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     """
-    Carrega setores censitários de Pelotas + junta todos os dados IBGE.
+    Carrega setores censitários do município alvo + junta os dados IBGE.
     Retorna GeoDataFrame com geometria e colunas numéricas.
     """
-    log.info("Carregando setores censitários: %s", SETOR_GEO.name)
-    setores = gpd.read_file(SETOR_GEO)
+    setor_geo = _resolve_existing_file(
+        [
+            SETOR_GEO,
+            RAW / "ibge_setores" / "setores_pelotas.geojson",
+            RAW / "ibge_setores" / "setores.geojson",
+        ],
+        "GeoJSON de setores",
+    )
+    log.info("Carregando setores censitários: %s", setor_geo.name)
+    setores = gpd.read_file(setor_geo)
+    if setores.empty:
+        raise ValueError(
+            f"Arquivo de setores está vazio ({setor_geo}). "
+            "Rode o download IBGE para o município/UF corretos."
+        )
     if setores.crs is None:
         setores = setores.set_crs(CRS_GEO)
     elif setores.crs.to_epsg() != 4674:
@@ -146,15 +192,77 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     setores["CD_SETOR"] = setores["CD_SETOR"].astype(str).str.strip()
 
     # Carregar arquivos IBGE
-    basico = _read_ibge(IBGE_DIR / "pelotas_basico.csv", BAS_COLS)
+    slug = IVS_OUT_NAME.removeprefix("ivs_").removesuffix(".csv")
+    basico_path = _resolve_existing_file(
+        [
+            IBGE_DIR / f"{slug}_basico.csv",
+            IBGE_DIR / "pelotas_basico.csv",
+            IBGE_DIR / "basico.csv",
+        ],
+        "IBGE basico",
+    )
+    dom1_path = _resolve_existing_file(
+        [
+            IBGE_DIR / f"{slug}_domicilio.csv",
+            IBGE_DIR / "pelotas_domicilio.csv",
+            IBGE_DIR / "domicilio.csv",
+        ],
+        "IBGE domicilio",
+    )
+    pessoa01_path = _resolve_existing_file(
+        [
+            IBGE_DIR / f"{slug}_pessoa01.csv",
+            IBGE_DIR / "pelotas_pessoa01.csv",
+            IBGE_DIR / "pessoa01.csv",
+        ],
+        "IBGE pessoa01",
+    )
+    alfa_path = _resolve_optional_file(
+        [
+            IBGE_DIR / f"{slug}_alfabetizacao.csv",
+            IBGE_DIR / f"{slug}_pessoa02.csv",
+            IBGE_DIR / "pelotas_alfabetizacao.csv",
+            IBGE_DIR / "pelotas_pessoa02.csv",
+            IBGE_DIR / "alfabetizacao.csv",
+            IBGE_DIR / "pessoa02.csv",
+        ]
+    )
+    dom2_path = _resolve_optional_file(
+        [
+            IBGE_DIR / f"{slug}_domicilio2.csv",
+            IBGE_DIR / "pelotas_domicilio2.csv",
+            IBGE_DIR / "domicilio2.csv",
+        ]
+    )
+    cor_path = _resolve_optional_file(
+        [
+            IBGE_DIR / f"{slug}_cor_raca.csv",
+            IBGE_DIR / "pelotas_cor_raca.csv",
+            IBGE_DIR / "cor_raca.csv",
+        ]
+    )
+
+    basico = _read_ibge(basico_path, BAS_COLS)
     basico = basico.rename(columns={"CD_setor": "CD_SETOR", "v0001": "pop_total"})
     basico["CD_SETOR"] = basico["CD_SETOR"].astype(str).str.strip()
 
-    dom1 = _read_ibge(IBGE_DIR / "pelotas_domicilio.csv", DOM1_COLS)
-    dom2 = _read_ibge(IBGE_DIR / "pelotas_domicilio2.csv", DOM2_COLS)
-    alfa = _read_ibge(IBGE_DIR / "pelotas_alfabetizacao.csv", ALFA_COLS)
-    pes  = _read_ibge(IBGE_DIR / "pelotas_pessoa01.csv", PES_COLS)
-    cor  = _read_ibge(IBGE_DIR / "pelotas_cor_raca.csv", COR_COLS)
+    dom1 = _read_ibge(dom1_path, DOM1_COLS)
+    dom2 = _read_ibge_optional(
+        [dom2_path] if dom2_path else [],
+        DOM2_COLS,
+        "IBGE domicilio2",
+    )
+    alfa = _read_ibge_optional(
+        [alfa_path] if alfa_path else [],
+        ALFA_COLS,
+        "IBGE alfabetizacao",
+    )
+    pes  = _read_ibge(pessoa01_path, PES_COLS)
+    cor  = _read_ibge_optional(
+        [cor_path] if cor_path else [],
+        COR_COLS,
+        "IBGE cor_raca",
+    )
 
     # Juntar tudo pelo CD_setor
     dfs = [dom1, dom2, alfa, pes, cor]
@@ -216,11 +324,12 @@ def contar_osc_por_territorio(territorios: gpd.GeoDataFrame) -> pd.Series:
     Conta entidades comunitárias (OpenStreetMap) por território Voronoi.
     Retorna Series indexada por id_ubs com contagem de OSC.
     """
-    if not OSC_FILE.exists():
-        log.warning("OSC JSON não encontrado: %s — D3 será NaN", OSC_FILE.name)
-        return pd.Series(np.nan, index=territorios.set_index("id_ubs").index)
+    osc_path = OSC_FILE if OSC_FILE.exists() else RAW / "osc_pelotas_osm.json"
+    if not osc_path.exists():
+        log.warning("OSC JSON não encontrado (%s) — D3 será neutro (0 OSC)", OSC_FILE.name)
+        return pd.Series(0.0, index=territorios.set_index("id_ubs").index)
 
-    with open(OSC_FILE, encoding="utf-8") as f:
+    with open(osc_path, encoding="utf-8") as f:
         records = json.load(f)
 
     osc_gdf = gpd.GeoDataFrame(
@@ -310,8 +419,25 @@ def calcular_indicadores(agg: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Calcula IVS parcial por município")
+    parser.add_argument(
+        "--base-dir",
+        default=str(DEFAULT_BASE),
+        help="Diretório base de dados (ex.: ivs_betim)",
+    )
+    parser.add_argument("--slug", default=DEFAULT_SLUG, help="Slug dos arquivos filtrados (ex.: betim)")
+    args = parser.parse_args()
+
+    _configure_runtime(Path(args.base_dir), args.slug)
+    log.info("Configuração ativa: base_dir=%s, slug=%s", BASE, args.slug)
+
     # 1. Carregar Voronoi + normalizar colunas
     log.info("Carregando territórios Voronoi: %s", VORONOI.name)
+    if not VORONOI.exists():
+        raise FileNotFoundError(
+            f"Arquivo não encontrado: {VORONOI}. "
+            "Rode o pipeline de download com --only voronoi antes do cálculo."
+        )
     territorios = gpd.read_file(VORONOI)
     if territorios.crs is None:
         territorios = territorios.set_crs(CRS_GEO)
@@ -376,7 +502,7 @@ def main():
     log.info("Totais IBGE por UBS salvos: %s (%d linhas)", out_raw.name, len(agg_out))
 
     # 7. Salvar indicadores
-    out_ind = PROC / "ivs_pelotas.csv"
+    out_ind = PROC / IVS_OUT_NAME
     ind.to_csv(out_ind)
     log.info("Indicadores IVS por UBS salvos: %s (%d linhas)", out_ind.name, len(ind))
 

@@ -1,10 +1,9 @@
-# IVSaúde POA — Índice de Vulnerabilidade em Saúde
+# IVSaúde — Índice de Vulnerabilidade em Saúde
 
-Replicação e atualização do **IVSaúde** da SMS de Porto Alegre para os
-**141 territórios de Unidades Básicas de Saúde (UBS)**, usando dados do
-Censo IBGE 2022 e fontes do SUS.
+Metodologia para cálculo do **Índice de Vulnerabilidade em Saúde (IVS)** por
+território de UBS, com base em Determinantes Sociais da Saúde e dados públicos.
 
-Metodologia: Determinantes Sociais da Saúde (Dahlgren & Whitehead, 1991).
+Referência conceitual: Dahlgren & Whitehead (1991).
 
 ---
 
@@ -12,17 +11,15 @@ Metodologia: Determinantes Sociais da Saúde (Dahlgren & Whitehead, 1991).
 
 ```
 ivs-ubs/
-├── data/
-│   ├── raw/                 # dados brutos (não versionados)
-│   └── processed/           # dados processados por UBS
-├── outputs/
-│   ├── maps/                # mapas PNG e HTML
-│   └── tables/              # tabelas CSV com scores
 ├── src/
-│   ├── download_shapefiles.py   # download automatizado de todas as fontes
-│   ├── gerar_voronoi_ubs.py     # territórios Voronoi (fallback CNES)
-│   └── calcular_ivs.py          # pipeline completo IVSaúde
-├── requirements.txt
+│   ├── download_*.py                # download e preparação das fontes
+│   ├── gerar_voronoi.py             # geração de territórios Voronoi
+│   ├── calcular_ivs_*.py            # cálculo dos indicadores D1-D5
+│   └── gerar_pagina_*.py            # geração de index.html (mapa + tabela)
+├── <base_dir>/
+│   ├── data/raw/                    # dados brutos
+│   └── data/processed/              # dados processados e resultados
+├── index.html                       # página final
 └── README.md
 ```
 
@@ -37,123 +34,128 @@ pip install -r requirements.txt
 
 ---
 
-## Uso
+## Pipeline de execução
 
-### 1. Baixar os dados
+### 1. Baixar e preparar dados
 
 ```bash
-python src/download_shapefiles.py
+python src/download_<pipeline>.py
 ```
 
-Para pular arquivos grandes (> 500 MB) em testes:
+Executar apenas uma etapa:
+
 ```bash
-python src/download_shapefiles.py --skip-large
+python src/download_<pipeline>.py --only ibge
 ```
 
-Para baixar apenas uma fonte:
+Opções disponíveis em `--only`:
+`cnes`, `voronoi`, `ibge`, `esf`, `sim`, `sinasc`, `sinan`, `censo_escolar`, `pbf`.
+
+### 2. Calcular indicadores por território
+
 ```bash
-python src/download_shapefiles.py --only ibge
-# ibge | cnes | ubs | esf | sim | sinasc | sinan | censo_escolar | pbf
+python src/calcular_ivs_<pipeline>.py
 ```
 
-### 2. Calcular o IVSaúde
+### 3. Gerar página HTML final
 
-Com dados reais:
 ```bash
-python src/calcular_ivs.py
+python src/gerar_pagina_<pipeline>.py
 ```
 
-Com territórios Voronoi (quando o shapefile oficial não está disponível):
-```bash
-python src/calcular_ivs.py --voronoi
-```
-
-Modo demonstração (dados sintéticos, sem nenhum arquivo externo):
-```bash
-python src/calcular_ivs.py --modo-demo
-```
+Substitua `<pipeline>` pelo sufixo disponível no diretório `src/`.
 
 ---
 
-## Dimensões e indicadores
+## Metodologia padrão
 
-| Dim | Peso | Indicadores |
-|-----|------|-------------|
-| D1  | 0,50 | % Bolsa Família · % analfabetismo · % pop negra · % óbitos violentos · % área de risco ambiental |
-| D2  | 0,30 | % sem saneamento · % sem coleta de lixo · % sem ESF · % evasão EM · % sem creche |
-| D3  | 0,10 | Nº entidades comunitárias *(indicador invertido)* |
-| D4  | 0,08 | % RN de mães adolescentes |
-| D5  | 0,02 | % < 1 ano · % adolescentes · % mulheres em idade fértil · % idosos |
+### Dimensões e pesos
 
-### Padronização
+| Dimensão | Peso | Indicadores implementados |
+|----------|------|---------------------------|
+| D1 — Condição Socioeconômica | 0,20 | `% analfabetismo 15+`, `% população preta+parda` |
+| D2 — Habitação e Saneamento | 0,20 | `% sem saneamento adequado`, `% sem coleta de lixo` |
+| D3 — Capital Social | 0,20 | `entidades comunitárias por 1.000 hab` *(invertido)* |
+| D4 — Saúde do Adolescente | 0,20 | `% população feminina 10-19 anos` *(proxy)* |
+| D5 — Perfil Demográfico | 0,20 | `% <1 ano (proxy)`, `% adolescentes`, `% mulheres 10-49`, `% idosos 60+` |
 
-- **Modelo I** (D1, D2, D4, D5): compara com a média de Porto Alegre
-  → 0,00 / 0,25 / 0,50 / 0,75 / 1,00
-- **Modelo II** (D3 — invertido): compara com média ± DP
-  → score final = 1 − score calculado
+### Etapas de cálculo
 
----
+1. Agregação setor censitário → território por interseção espacial ponderada por área.
+2. Cálculo dos indicadores brutos por território.
+3. Normalização min-max por indicador no intervalo `[0,1]`.
+4. Inversão de indicadores protetivos (D3).
+5. Score por dimensão: média simples dos indicadores da dimensão.
+6. IVS parcial: média ponderada das dimensões.
 
-## Obtenção do shapefile das UBS
+### Fórmulas principais
 
-O maior gargalo é o shapefile oficial dos 141 territórios de UBS.
+Agregação espacial:
 
-**Opção A — GeoSampa (recomendada):**
-O script `download_shapefiles.py` tenta baixar via WFS automaticamente.
-Se falhar, acesse <https://geosampa.prefpoa.com.br>, busque
-*"áreas de abrangência UBS"* e exporte como GeoJSON.
-Salve em `data/raw/ubs_territorios/territorios_ubs.geojson`.
-
-**Opção B — Voronoi pelo CNES (fallback):**
-```bash
-python src/download_shapefiles.py --only cnes
-python src/gerar_voronoi_ubs.py
-python src/calcular_ivs.py --voronoi
+```text
+fração = área_interseção(setor, território) / área_total(setor)
+valor_território = Σ(valor_setor × fração)
 ```
-Gera territórios aproximados (polígonos de Voronoi) a partir dos
-pontos geocodificados do CNES. Precisão menor que o shapefile oficial.
+
+Normalização:
+
+```text
+score = (valor - min) / (max - min)
+```
+
+IVS parcial:
+
+```text
+IVS = D1×0,20 + D2×0,20 + D3×0,20 + D4×0,20 + D5×0,20
+```
+
+Classes de vulnerabilidade:
+
+- Baixa: `IVS < 0,33`
+- Média: `0,33 <= IVS < 0,66`
+- Alta: `IVS >= 0,66`
 
 ---
 
-## Dados para outros municípios
+## Entradas e saídas principais
 
-O pipeline foi projetado para ser reutilizável. Para adaptar a outro município:
+Entradas mínimas esperadas:
 
-1. Altere `COD_MUNICIPIO_IBGE` em `download_shapefiles.py`
-2. Obtenha o shapefile dos territórios das UBS da Secretaria Municipal de Saúde
-3. Execute o pipeline normalmente
+- Setores censitários (geometria)
+- Agregados do Censo por setor
+- Pontos de UBS para geração de Voronoi
+- Entidades comunitárias (OSM/Overpass)
 
----
+Saídas:
 
-## Entregáveis
-
-| Arquivo | Descrição |
-|---------|-----------|
-| `outputs/tables/ivs_poa_resultado_final.csv` | Ranking das 141 UBS com IVS e scores por dimensão |
-| `outputs/tables/indicadores_por_ubs.csv` | Valores brutos de cada indicador por UBS |
-| `outputs/tables/qualidade_dados.csv` | Metadados de qualidade (fonte, ano, % missing) |
-| `outputs/maps/ivs_poa_mapa_interativo.html` | Mapa coroplético interativo (Folium) |
-| `outputs/maps/ivs_poa_mapa_estatico.png` | Mapa estático de alta resolução |
-| `outputs/maps/ivs_poa_top20_vulneraveis.png` | Top 20 UBS mais vulneráveis |
-| `outputs/maps/ivs_poa_top20_menos_vulneraveis.png` | Top 20 UBS menos vulneráveis |
-| `outputs/maps/ivs_poa_heatmap_dimensoes.png` | Heatmap UBS × dimensões |
+- `<base_dir>/data/processed/territorios_voronoi_ubs.geojson`
+- `<base_dir>/data/processed/ibge_por_ubs.csv`
+- `<base_dir>/data/processed/ivs_*.csv`
+- `<base_dir>/data/processed/status_downloads.csv`
+- `index.html`
 
 ---
 
 ## Fontes de dados
 
-| Dado | Fonte | Acesso |
-|------|-------|--------|
-| Setores censitários / pop | IBGE Censo 2022 | <https://geoftp.ibge.gov.br> |
-| Territórios UBS | SMS-POA / GeoSampa | <https://geosampa.prefpoa.com.br> |
-| Localização UBS | CNES/DataSUS | <https://cnes.datasus.gov.br> |
-| Cobertura ESF | e-Gestor APS | <https://egestorab.saude.gov.br> |
-| Bolsa Família | Portal da Transparência | <https://portaldatransparencia.gov.br> |
-| Óbitos (SIM) | DataSUS FTP | <ftp://ftp.datasus.gov.br> |
-| Nascidos vivos (SINASC) | DataSUS FTP | <ftp://ftp.datasus.gov.br> |
-| Sífilis congênita (SINAN) | DataSUS FTP | <ftp://ftp.datasus.gov.br> |
-| Matrículas escolares | Censo Escolar INEP | <https://www.gov.br/inep> |
-| Entidades OSC | MAPA OSC/IPEA | <https://mapaosc.ipea.gov.br> |
+| Dado | Fonte |
+|------|-------|
+| Setores censitários e agregados do universo | IBGE Censo 2022 |
+| Estabelecimentos e localização de UBS | CNES / DataSUS |
+| SIM, SINASC, SINAN | DataSUS |
+| Cobertura APS/ESF | e-Gestor APS |
+| Benefícios de transferência de renda | Portal da Transparência |
+| Matrículas escolares | INEP |
+| Entidades comunitárias | OpenStreetMap (Overpass API) |
+
+---
+
+## Limitações conhecidas
+
+- Parte das bases de saúde públicas não possui geocódigo individual.
+- Algumas fontes podem estar disponíveis apenas em nível agregado.
+- Territórios Voronoi são aproximações quando o limite oficial não é fornecido.
+- O IVS gerado nesta versão é parcial e depende da disponibilidade local de dados.
 
 ---
 
@@ -161,5 +163,3 @@ O pipeline foi projetado para ser reutilizável. Para adaptar a outro município
 
 > Dahlgren, G. & Whitehead, M. (1991). *Policies and strategies to promote
 > social equity in health.* Stockholm: Institute for Future Studies.
->
-> SMS Porto Alegre / DGVS — IVSaúde (metodologia original, territórios 2015).

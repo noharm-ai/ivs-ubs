@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -34,8 +35,8 @@ except ImportError:  # pragma: no cover
     def tqdm(*args, **kwargs):  # type: ignore[override]
         return _TqdmNoop()
 
-from download_sim import download_sim_pelotas
-from download_sinasc import download_sinasc_pelotas
+from download_sim import download_sim_municipio
+from download_sinasc import download_sinasc_municipio
 from gerar_voronoi import generate_voronoi
 
 logging.basicConfig(
@@ -45,9 +46,16 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-MUNICIPIO_IBGE = "4314407"
+DEFAULT_MUNICIPIO_IBGE = "4314407"
+DEFAULT_UF = "RS"
+DEFAULT_CIDADE = "Pelotas"
+DEFAULT_SLUG = "pelotas"
+
+MUNICIPIO_IBGE = DEFAULT_MUNICIPIO_IBGE
 MUNICIPIO_IBGE_6 = MUNICIPIO_IBGE[:6]
-UF = "RS"
+UF = DEFAULT_UF
+CIDADE = DEFAULT_CIDADE
+SLUG = DEFAULT_SLUG
 
 
 @dataclass
@@ -61,8 +69,27 @@ class StatusRow:
 
 def _session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": "ivs-pelotas/1.0"})
+    s.headers.update({"User-Agent": f"ivs-{SLUG}/1.0"})
     return s
+
+
+def _slugify(text: str) -> str:
+    txt = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    txt = re.sub(r"[^a-zA-Z0-9]+", "_", txt).strip("_").lower()
+    return txt or "municipio"
+
+
+def _configure_runtime(municipio_ibge: str, uf: str, cidade: str, slug: str | None = None) -> None:
+    global MUNICIPIO_IBGE, MUNICIPIO_IBGE_6, UF, CIDADE, SLUG
+    MUNICIPIO_IBGE = str(municipio_ibge).strip()
+    MUNICIPIO_IBGE_6 = MUNICIPIO_IBGE[:6]
+    UF = str(uf).strip().upper()
+    CIDADE = str(cidade).strip()
+    SLUG = _slugify(slug or cidade)
+
+
+def _city_file(prefix: str, ext: str = "csv") -> str:
+    return f"{SLUG}_{prefix}.{ext}"
 
 
 def _month_sequence(n: int = 18, include_current: bool = False) -> list[str]:
@@ -241,7 +268,7 @@ def _extract_cnes_from_xml(xml_path: Path) -> list[dict]:
 
 def _extract_cnes_from_base_csv(base_csv: Path) -> list[dict]:
     """
-    Extrai UBS de Pelotas de um tbEstabelecimento do pacote BASE_DE_DADOS_CNES.
+    Extrai UBS do município alvo de um tbEstabelecimento do pacote BASE_DE_DADOS_CNES.
     """
     sep, encoding = _detect_csv_sep(base_csv)
     cols = [
@@ -364,8 +391,8 @@ def _pick_universe_source_csv(csv_pool: list[Path], target_name: str, keywords: 
 def step_cnes(base_dir: Path) -> StatusRow:
     raw_cnes = base_dir / "data" / "raw" / "cnes"
     raw_cnes.mkdir(parents=True, exist_ok=True)
-    json_dest = raw_cnes / "ubs_pelotas.json"
-    csv_dest = raw_cnes / "ubs_pelotas_pontos.csv"
+    json_dest = raw_cnes / f"ubs_{SLUG}.json"
+    csv_dest = raw_cnes / f"ubs_{SLUG}_pontos.csv"
 
     records: list[dict] = []
     source = ""
@@ -483,7 +510,7 @@ def step_cnes(base_dir: Path) -> StatusRow:
 def step_voronoi(base_dir: Path) -> StatusRow:
     out_file = base_dir / "data" / "processed" / "territorios_voronoi_ubs.geojson"
     try:
-        res = generate_voronoi(base_dir=base_dir, municipio_ibge=MUNICIPIO_IBGE)
+        res = generate_voronoi(base_dir=base_dir, municipio_ibge=MUNICIPIO_IBGE, slug=SLUG)
         cov = float(res["cobertura_area"]) * 100
         log.info(
             "[ETAPA 2] concluída — %d polígonos em %s (cobertura %.2f%%)",
@@ -511,13 +538,13 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
     universo_dir = base_dir / "data" / "raw" / "ibge_universo"
     setores_dir.mkdir(parents=True, exist_ok=True)
     universo_dir.mkdir(parents=True, exist_ok=True)
-    setores_pelotas = setores_dir / "setores_pelotas.geojson"
+    setores_geojson = setores_dir / f"setores_{SLUG}.geojson"
 
     if skip_large:
         rows.append(
             StatusRow(
                 "IBGE setores",
-                _rel(base_dir, setores_pelotas),
+                _rel(base_dir, setores_geojson),
                 "MANUAL",
                 0,
                 "download grande pulado (--skip-large)",
@@ -535,9 +562,13 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
 
             repo_root = Path(__file__).resolve().parents[1]
             local_shp_candidates.extend(
-                sorted((repo_root / "data" / "RS_setores_CD2022").glob("**/*.shp"))
+                sorted((repo_root / "data" / f"{UF}_setores_CD2022").glob("**/*.shp"))
             )
-            local_shp_candidates.extend(sorted(Path("data/RS_setores_CD2022").glob("**/*.shp")))
+            local_shp_candidates.extend(sorted(Path(f"data/{UF}_setores_CD2022").glob("**/*.shp")))
+            # fallback legado RS apenas quando UF alvo for RS
+            if UF == "RS":
+                local_shp_candidates.extend(sorted((repo_root / "data" / "RS_setores_CD2022").glob("**/*.shp")))
+                local_shp_candidates.extend(sorted(Path("data/RS_setores_CD2022").glob("**/*.shp")))
             local_shp_candidates.extend(sorted(setores_dir.glob("**/*.shp")))
 
             shp_path: Optional[Path] = None
@@ -557,14 +588,14 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                 source_setores = f"local: {shp_path}"
                 gdf = gpd.read_file(shp_path)
             else:
-                setores_zip = setores_dir / "SC_Intra_RS_2022.zip"
+                setores_zip = setores_dir / f"{UF}_setores_CD2022.zip"
                 setores_urls = [
                     "https://geoftp.ibge.gov.br/organizacao_do_territorio/"
                     "malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/"
-                    "censo_2022/setores/shp/UF/RS_setores_CD2022.zip",
+                    f"censo_2022/setores/shp/UF/{UF}_setores_CD2022.zip",
                     "https://geoftp.ibge.gov.br/organizacao_do_territorio/"
                     "malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/"
-                    "censo_2022/setores_censitarios_shp/RS/SC_Intra_RS_2022.zip",
+                    f"censo_2022/setores_censitarios_shp/{UF}/SC_Intra_{UF}_2022.zip",
                 ]
                 used_url = _download_first_available(setores_urls, setores_zip)
                 _unzip(setores_zip, setores_dir)
@@ -586,15 +617,17 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                     raise KeyError("coluna de município/setor não encontrada no shapefile")
                 vals = gdf[setor_col].astype(str).str.replace(r"\D", "", regex=True)
                 filt = gdf[vals.str.startswith(MUNICIPIO_IBGE) | vals.str.startswith(MUNICIPIO_IBGE_6)].copy()
+            if filt.empty:
+                raise ValueError(f"nenhum setor encontrado para o município {MUNICIPIO_IBGE} na fonte de setores")
 
-            filt.to_file(setores_pelotas, driver="GeoJSON")
+            filt.to_file(setores_geojson, driver="GeoJSON")
             obs = f"fonte: {source_setores}" if source_setores else ""
-            rows.append(StatusRow("IBGE setores", _rel(base_dir, setores_pelotas), "OK", int(len(filt)), obs))
+            rows.append(StatusRow("IBGE setores", _rel(base_dir, setores_geojson), "OK", int(len(filt)), obs))
         except Exception as e:  # noqa: BLE001
             rows.append(
                 StatusRow(
                     "IBGE setores",
-                    _rel(base_dir, setores_pelotas),
+                    _rel(base_dir, setores_geojson),
                     "MANUAL",
                     0,
                     f"falha no download/processamento ({e})",
@@ -605,16 +638,18 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
     # A nova estrutura do IBGE (2025) usa arquivos BR nacionais por tema.
     # Keywords sem "rs" para compatibilidade com ambos os formatos.
     expected = {
-        "basico": ("Basico_RS.csv", universo_dir / "pelotas_basico.csv", ["basico"]),
-        "domicilio": ("Domicilio01_RS.csv", universo_dir / "pelotas_domicilio.csv", ["domicilio1"]),
-        "pessoa01": ("Pessoa01_RS.csv", universo_dir / "pelotas_pessoa01.csv", ["demografia"]),
-        "pessoa02": ("Pessoa02_RS.csv", universo_dir / "pelotas_pessoa02.csv", ["alfabetizacao"]),
+        "basico": (f"Basico_{UF}.csv", universo_dir / _city_file("basico"), ["basico"]),
+        "domicilio1": (f"Domicilio01_{UF}.csv", universo_dir / _city_file("domicilio"), ["domicilio1"]),
+        "domicilio2": (f"Domicilio02_{UF}.csv", universo_dir / _city_file("domicilio2"), ["domicilio2"]),
+        "alfabetizacao": (f"Pessoa02_{UF}.csv", universo_dir / _city_file("alfabetizacao"), ["alfabetizacao"]),
+        "pessoa01": (f"Pessoa01_{UF}.csv", universo_dir / _city_file("pessoa01"), ["demografia"]),
+        "cor_raca": (f"CorRaca_{UF}.csv", universo_dir / _city_file("cor_raca"), ["cor", "raca"]),
     }
     if skip_large:
         rows.append(
             StatusRow(
                 "IBGE universo",
-                "raw/ibge_universo/pelotas_*.csv",
+                f"raw/ibge_universo/{SLUG}_*.csv",
                 "MANUAL",
                 0,
                 "download grande pulado (--skip-large)",
@@ -651,8 +686,11 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                 new_theme_zips = [
                     "Agregados_por_setores_basico_BR_20250417.zip",
                     "Agregados_por_setores_caracteristicas_domicilio1_BR.zip",
+                    "Agregados_por_setores_caracteristicas_domicilio2_BR.zip",
                     "Agregados_por_setores_demografia_BR.zip",
                     "Agregados_por_setores_alfabetizacao_BR.zip",
+                    "Agregados_por_setores_cor_ou_raca_BR.zip",
+                    "Agregados_por_setores_cor_raca_BR.zip",
                 ]
                 downloaded_any = False
                 for zip_name in new_theme_zips:
@@ -679,14 +717,14 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                         "https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022/"
                         "Resultados_do_Universo/Agregados_por_Setores_Censitarios/"
                     )
-                    univ_zip = universo_dir / "RS_20231030.zip"
+                    univ_zip = universo_dir / f"{UF}_20231030.zip"
                     if univ_zip.exists() and not zipfile.is_zipfile(univ_zip):
                         log.warning("  ZIP IBGE universo inválido detectado (%s), removendo para novo download", univ_zip.name)
                         univ_zip.unlink()
-                    fallback_urls: list[str] = [old_base + "RS_20231030.zip", old_base + "rs_20231030.zip"]
+                    fallback_urls: list[str] = [old_base + f"{UF}_20231030.zip", old_base + f"{UF.lower()}_20231030.zip"]
                     for link in _list_zip_links(old_base):
                         lname = Path(urlparse(link).path).name.upper()
-                        if lname.startswith("RS_") and lname.endswith(".ZIP"):
+                        if lname.startswith(f"{UF}_") and lname.endswith(".ZIP"):
                             fallback_urls.insert(0, link)
                     used_url = _download_first_available(fallback_urls, univ_zip)
                     source_universe = used_url
@@ -715,7 +753,7 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
             rows.append(
                 StatusRow(
                     "IBGE universo",
-                    "raw/ibge_universo/pelotas_*.csv",
+                    f"raw/ibge_universo/{SLUG}_*.csv",
                     status,
                     n_reg,
                     obs,
@@ -725,7 +763,7 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
             rows.append(
                 StatusRow(
                     "IBGE universo",
-                    "raw/ibge_universo/pelotas_*.csv",
+                    f"raw/ibge_universo/{SLUG}_*.csv",
                     "MANUAL",
                     0,
                     f"falha no download/processamento ({e})",
@@ -741,7 +779,7 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
 
 
 def step_esf(base_dir: Path) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "esf" / "cobertura_esf_pelotas.csv"
+    out_csv = base_dir / "data" / "raw" / "esf" / _city_file("cobertura_esf")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     if out_csv.exists() and out_csv.stat().st_size > 0:
@@ -786,14 +824,20 @@ def step_esf(base_dir: Path) -> StatusRow:
     pd.DataFrame(columns=["co_cnes", "nu_cnes", "nu_cobertura_esf"]).to_csv(out_csv, index=False)
     obs = (
         "download manual necessário em egestorab.saude.gov.br — "
-        "filtrar Pelotas (4314407) e exportar CSV"
+        f"filtrar {CIDADE} ({MUNICIPIO_IBGE}) e exportar CSV"
     )
     log.info("[ETAPA 4] concluída — modo manual")
     return StatusRow("ESF", _rel(base_dir, out_csv), "MANUAL", 0, obs)
 
 
 def step_sim(base_dir: Path) -> StatusRow:
-    res = download_sim_pelotas(base_dir=base_dir, years=(2021, 2022, 2023), municipio=MUNICIPIO_IBGE)
+    res = download_sim_municipio(
+        base_dir=base_dir,
+        years=(2021, 2022, 2023),
+        municipio=MUNICIPIO_IBGE,
+        uf=UF,
+        file_prefix=f"obitos_{SLUG}",
+    )
     ok = [r for r in res if r["status"] == "OK"]
     n_total = int(sum(r["n_registros"] for r in ok))
     if len(ok) == len(res):
@@ -806,11 +850,17 @@ def step_sim(base_dir: Path) -> StatusRow:
         status = "MANUAL"
         obs = "; ".join(sorted({r["obs"] for r in res}))
     log.info("[ETAPA 5] SIM concluída — total %d registros (2021-2023)", n_total)
-    return StatusRow("SIM", "raw/sim/obitos_pelotas_YYYY.csv", status, n_total, obs)
+    return StatusRow("SIM", f"raw/sim/obitos_{SLUG}_YYYY.csv", status, n_total, obs)
 
 
 def step_sinasc(base_dir: Path) -> StatusRow:
-    res = download_sinasc_pelotas(base_dir=base_dir, years=(2021, 2022, 2023), municipio=MUNICIPIO_IBGE)
+    res = download_sinasc_municipio(
+        base_dir=base_dir,
+        years=(2021, 2022, 2023),
+        municipio=MUNICIPIO_IBGE,
+        uf=UF,
+        file_prefix=f"nascidos_{SLUG}",
+    )
     ok = [r for r in res if r["status"] == "OK"]
     n_total = int(sum(r["n_registros"] for r in ok))
     if len(ok) == len(res):
@@ -823,11 +873,11 @@ def step_sinasc(base_dir: Path) -> StatusRow:
         status = "MANUAL"
         obs = "; ".join(sorted({r["obs"] for r in res}))
     log.info("[ETAPA 5] SINASC concluída — total %d registros (2021-2023)", n_total)
-    return StatusRow("SINASC", "raw/sinasc/nascidos_pelotas_YYYY.csv", status, n_total, obs)
+    return StatusRow("SINASC", f"raw/sinasc/nascidos_{SLUG}_YYYY.csv", status, n_total, obs)
 
 
 def step_sinan(base_dir: Path) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "sinan" / "sifilis_pelotas.csv"
+    out_csv = base_dir / "data" / "raw" / "sinan" / _city_file("sifilis")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     # Pula apenas se arquivo já tem dados
@@ -915,7 +965,7 @@ def _resolve_censo_url(session: requests.Session) -> tuple[str, int] | None:
 
 
 def step_censo_escolar(base_dir: Path, skip_large: bool = False) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "censo_escolar" / "matriculas_pelotas.csv"
+    out_csv = base_dir / "data" / "raw" / "censo_escolar" / _city_file("matriculas")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     if out_csv.exists() and out_csv.stat().st_size > 0:
         df = pd.read_csv(out_csv, dtype=str)
@@ -954,7 +1004,7 @@ def step_censo_escolar(base_dir: Path, skip_large: bool = False) -> StatusRow:
                 with zf.open(esc_new) as f:
                     escola_df = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False,
                                             usecols=["CO_ENTIDADE", "CO_MUNICIPIO"])
-                pelotas_entidades = set(
+                municipio_entidades = set(
                     escola_df[escola_df["CO_MUNICIPIO"].astype(str).str.replace(r"\D", "", regex=True)
                                .str.startswith(MUNICIPIO_IBGE_6)]["CO_ENTIDADE"].astype(str)
                 )
@@ -963,15 +1013,15 @@ def step_censo_escolar(base_dir: Path, skip_large: bool = False) -> StatusRow:
                 mat_df["CO_MUNICIPIO"] = mat_df["CO_ENTIDADE"].map(
                     escola_df.set_index("CO_ENTIDADE")["CO_MUNICIPIO"].astype(str)
                 )
-                filt = mat_df[mat_df["CO_ENTIDADE"].isin(pelotas_entidades)].copy()
+                filt = mat_df[mat_df["CO_ENTIDADE"].isin(municipio_entidades)].copy()
             else:
-                # Formato antigo: MATRICULA_RS.CSV com CO_MUNICIPIO direto
-                rs = [v for k, v in csvs_upper.items() if "MATRICULA" in k and "RS" in k]
-                if not rs:
-                    rs = [v for k, v in csvs_upper.items() if "MATRICULA" in k]
-                if not rs:
+                # Formato antigo: MATRICULA_UF.CSV com CO_MUNICIPIO direto
+                uf_csvs = [v for k, v in csvs_upper.items() if "MATRICULA" in k and UF in k]
+                if not uf_csvs:
+                    uf_csvs = [v for k, v in csvs_upper.items() if "MATRICULA" in k]
+                if not uf_csvs:
                     raise FileNotFoundError("arquivo matrícula não encontrado no ZIP")
-                member = rs[0]
+                member = uf_csvs[0]
                 extracted = out_csv.parent / Path(member).name
                 with zf.open(member) as src, open(extracted, "wb") as dst:
                     dst.write(src.read())
@@ -994,7 +1044,7 @@ def step_censo_escolar(base_dir: Path, skip_large: bool = False) -> StatusRow:
 
 
 def step_pbf(base_dir: Path) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "pbf" / "pbf_pelotas_202312.csv"
+    out_csv = base_dir / "data" / "raw" / "pbf" / _city_file("pbf_202312")
     out_csv.parent.mkdir(parents=True, exist_ok=True)
     s = _session()
 
@@ -1058,12 +1108,12 @@ def step_pbf(base_dir: Path) -> StatusRow:
             filt = df[vals.str.startswith(MUNICIPIO_IBGE) | vals.str.startswith(MUNICIPIO_IBGE_6)].copy()
         elif col_mun:
             vals = df[col_mun].astype(str).str.upper()
-            filt = df[vals.str.contains("PELOTAS", na=False)].copy()
+            filt = df[vals.str.contains(CIDADE.upper(), na=False)].copy()
         else:
             raise KeyError("coluna de município/IBGE não encontrada")
 
         if filt.empty:
-            raise ValueError("fallback CSV sem linhas de Pelotas")
+            raise ValueError(f"fallback CSV sem linhas de {CIDADE}")
         filt.to_csv(out_csv, index=False)
         log.info("[ETAPA 8] concluída — %d linhas em %s", len(filt), _rel(base_dir, out_csv))
         return StatusRow("PBF", _rel(base_dir, out_csv), "OK", int(len(filt)), "via CSV mensal")
@@ -1118,12 +1168,16 @@ def run_pipeline(base_dir: Path, only: str | None = None, skip_large: bool = Fal
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download de dados IVSaúde Pelotas/RS")
+    parser = argparse.ArgumentParser(description="Download de dados IVSaúde por município")
     parser.add_argument(
         "--base-dir",
-        default=str(Path(__file__).resolve().parents[1] / "ivs_pelotas"),
-        help="Diretório base (onde será criada a estrutura ivs_pelotas)",
+        default=None,
+        help="Diretório base de saída (ex.: ivs_betim). Padrão: ivs_<slug>",
     )
+    parser.add_argument("--municipio-ibge", default=DEFAULT_MUNICIPIO_IBGE, help="Código IBGE do município")
+    parser.add_argument("--uf", default=DEFAULT_UF, help="Sigla da UF (ex.: MG)")
+    parser.add_argument("--cidade", default=DEFAULT_CIDADE, help="Nome da cidade")
+    parser.add_argument("--slug", default=None, help="Slug para nomes de arquivo (ex.: betim)")
     parser.add_argument(
         "--only",
         choices=["cnes", "voronoi", "ibge", "esf", "sim", "sinasc", "sinan", "censo_escolar", "pbf"],
@@ -1133,7 +1187,20 @@ def main() -> None:
     parser.add_argument("--skip-large", action="store_true", help="Pula arquivos grandes (IBGE/Censo Escolar)")
     args = parser.parse_args()
 
-    base_dir = Path(args.base_dir).resolve()
+    _configure_runtime(args.municipio_ibge, args.uf, args.cidade, args.slug)
+    base_dir = (
+        Path(args.base_dir).resolve()
+        if args.base_dir
+        else (Path(__file__).resolve().parents[1] / f"ivs_{SLUG}").resolve()
+    )
+    log.info(
+        "Configuração ativa: cidade=%s, ibge=%s, uf=%s, slug=%s, base_dir=%s",
+        CIDADE,
+        MUNICIPIO_IBGE,
+        UF,
+        SLUG,
+        base_dir,
+    )
     rows = run_pipeline(base_dir=base_dir, only=args.only, skip_large=args.skip_large)
 
     df = pd.DataFrame([asdict(r) for r in rows])

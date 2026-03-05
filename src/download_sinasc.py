@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import urllib.request
 from pathlib import Path
 from typing import Iterable
 
@@ -32,10 +31,15 @@ def _filter_by_municipio(df: pd.DataFrame, col_candidates: Iterable[str], munici
     return df.loc[mask].copy()
 
 
-def download_sinasc_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022, 2023),
-                            municipio: str = "4314407") -> list[dict]:
+def download_sinasc_municipio(
+    base_dir: Path,
+    years: tuple[int, ...] = (2021, 2022, 2023),
+    municipio: str = "4314407",
+    uf: str = "RS",
+    file_prefix: str = "nascidos",
+) -> list[dict]:
     """
-    Baixa SINASC (RS) por ano e filtra Pelotas.
+    Baixa SINASC por ano e filtra município.
     Retorna lista de resultados por ano.
     """
     out_dir = base_dir / "data" / "raw" / "sinasc"
@@ -46,7 +50,7 @@ def download_sinasc_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022
     _sinasc_db = None
 
     for year in years:
-        out_csv = out_dir / f"nascidos_pelotas_{year}.csv"
+        out_csv = out_dir / f"{file_prefix}_{year}.csv"
         # Pula apenas se o arquivo já tem dados (n > 0)
         if out_csv.exists() and out_csv.stat().st_size > 0:
             try:
@@ -67,9 +71,9 @@ def download_sinasc_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022
             if _sinasc_db is None:
                 _sinasc_db = _SINASC()
                 _sinasc_db.load()
-            files = _sinasc_db.get_files("DN", uf="RS", year=year)
+            files = _sinasc_db.get_files("DN", uf=uf, year=year)
             if not files:
-                raise FileNotFoundError(f"SINASC DN RS {year} não encontrado no FTP")
+                raise FileNotFoundError(f"SINASC DN {uf} {year} não encontrado no FTP")
             data = files[0].download(local_dir=str(out_dir))
             df = data.to_dataframe()
             df_filtrado = _filter_by_municipio(df, ("CODMUNNASC", "codmunnasc"), municipio)
@@ -91,9 +95,24 @@ def download_sinasc_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022
     return results
 
 
+def download_sinasc_pelotas(
+    base_dir: Path,
+    years: tuple[int, ...] = (2021, 2022, 2023),
+    municipio: str = "4314407",
+) -> list[dict]:
+    """Compatibilidade retroativa."""
+    return download_sinasc_municipio(
+        base_dir=base_dir,
+        years=years,
+        municipio=municipio,
+        uf="RS",
+        file_prefix="nascidos_pelotas",
+    )
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")
     base = Path(__file__).resolve().parents[1] / "ivs_pelotas"
-    res = download_sinasc_pelotas(base_dir=base)
+    res = download_sinasc_municipio(base_dir=base, file_prefix="nascidos_pelotas")
     for row in res:
         log.info("SINASC %s: %s (%s) - %s", row["year"], row["n_registros"], row["status"], row["arquivo"])

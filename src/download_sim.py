@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import urllib.request
 from pathlib import Path
 from typing import Iterable
 
@@ -32,10 +31,15 @@ def _filter_by_municipio(df: pd.DataFrame, col_candidates: Iterable[str], munici
     return df.loc[mask].copy()
 
 
-def download_sim_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022, 2023),
-                         municipio: str = "4314407") -> list[dict]:
+def download_sim_municipio(
+    base_dir: Path,
+    years: tuple[int, ...] = (2021, 2022, 2023),
+    municipio: str = "4314407",
+    uf: str = "RS",
+    file_prefix: str = "obitos",
+) -> list[dict]:
     """
-    Baixa SIM (RS) por ano e filtra Pelotas.
+    Baixa SIM por ano e filtra município.
     Retorna lista de resultados por ano.
     """
     out_dir = base_dir / "data" / "raw" / "sim"
@@ -46,7 +50,7 @@ def download_sim_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022, 2
     _sim_db = None
 
     for year in years:
-        out_csv = out_dir / f"obitos_pelotas_{year}.csv"
+        out_csv = out_dir / f"{file_prefix}_{year}.csv"
         # Pula apenas se o arquivo já tem dados (n > 0)
         if out_csv.exists() and out_csv.stat().st_size > 0:
             try:
@@ -67,9 +71,9 @@ def download_sim_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022, 2
             if _sim_db is None:
                 _sim_db = _SIM()
                 _sim_db.load()
-            files = _sim_db.get_files("CID10", uf="RS", year=year)
+            files = _sim_db.get_files("CID10", uf=uf, year=year)
             if not files:
-                raise FileNotFoundError(f"SIM CID10 RS {year} não encontrado no FTP")
+                raise FileNotFoundError(f"SIM CID10 {uf} {year} não encontrado no FTP")
             data = files[0].download(local_dir=str(out_dir))
             df = data.to_dataframe()
             df_filtrado = _filter_by_municipio(df, ("CODMUNRES", "codmunres"), municipio)
@@ -91,9 +95,24 @@ def download_sim_pelotas(base_dir: Path, years: tuple[int, ...] = (2021, 2022, 2
     return results
 
 
+def download_sim_pelotas(
+    base_dir: Path,
+    years: tuple[int, ...] = (2021, 2022, 2023),
+    municipio: str = "4314407",
+) -> list[dict]:
+    """Compatibilidade retroativa."""
+    return download_sim_municipio(
+        base_dir=base_dir,
+        years=years,
+        municipio=municipio,
+        uf="RS",
+        file_prefix="obitos_pelotas",
+    )
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")
     base = Path(__file__).resolve().parents[1] / "ivs_pelotas"
-    res = download_sim_pelotas(base_dir=base)
+    res = download_sim_municipio(base_dir=base, file_prefix="obitos_pelotas")
     for row in res:
         log.info("SIM %s: %s (%s) - %s", row["year"], row["n_registros"], row["status"], row["arquivo"])

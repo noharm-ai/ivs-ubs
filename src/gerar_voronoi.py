@@ -99,14 +99,14 @@ def _download_limite_municipal(municipio_ibge: str, dest: Path, timeout: int = 6
     raise RuntimeError("Não foi possível baixar limite municipal do IBGE")
 
 
-def _resolve_limite_municipal(base_dir: Path, municipio_ibge: str, dest: Path) -> Path:
+def _resolve_limite_municipal(base_dir: Path, municipio_ibge: str, dest: Path, slug: str) -> Path:
     """
     Resolve o limite municipal priorizando arquivo local.
     Ordem:
       1) dest já existente
       2) IBGE_MUNICIPIO_GEOJSON_PATH (env)
-      3) <repo>/data/pelotas.geojson
-      4) <repo>/data/limite_pelotas.geojson
+      3) <repo>/data/{slug}.geojson
+      4) <repo>/data/limite_{slug}.geojson
       5) download API IBGE
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -118,9 +118,10 @@ def _resolve_limite_municipal(base_dir: Path, municipio_ibge: str, dest: Path) -
     repo_root = Path(__file__).resolve().parents[1]
     local_candidates = [
         env_path,
-        repo_root / "data" / "pelotas.geojson",
-        repo_root / "data" / "limite_pelotas.geojson",
-        base_dir / "data" / "pelotas.geojson",
+        repo_root / "data" / f"{slug}.geojson",
+        repo_root / "data" / f"limite_{slug}.geojson",
+        base_dir / "data" / f"{slug}.geojson",
+        base_dir / "data" / f"limite_{slug}.geojson",
     ]
     seen: set[Path] = set()
     for cand in local_candidates:
@@ -134,19 +135,46 @@ def _resolve_limite_municipal(base_dir: Path, municipio_ibge: str, dest: Path) -
             shutil.copy2(cand, dest)
             return dest
 
+    # Fallback sem rede: gerar limite municipal a partir dos setores já filtrados
+    setores_candidates = [
+        base_dir / "data" / "raw" / "ibge_setores" / f"setores_{slug}.geojson",
+        base_dir / "data" / "raw" / "ibge_setores" / "setores.geojson",
+    ]
+    for setores_path in setores_candidates:
+        if not setores_path.exists() or not setores_path.is_file():
+            continue
+        try:
+            setores = gpd.read_file(setores_path)
+            if setores.empty:
+                continue
+            limite = gpd.GeoDataFrame(
+                geometry=[unary_union(setores.geometry)],
+                crs=setores.crs or CRS_GEO,
+            )
+            limite.to_file(dest, driver="GeoJSON")
+            return dest
+        except Exception:  # noqa: BLE001
+            continue
+
     return _download_limite_municipal(municipio_ibge, dest)
 
 
-def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407") -> dict:
+def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str = "pelotas") -> dict:
     """
-    Gera territórios Voronoi das UBS de Pelotas.
+    Gera territórios Voronoi das UBS para o município configurado.
     """
-    pontos_csv = base_dir / "data" / "raw" / "cnes" / "ubs_pelotas_pontos.csv"
-    limite_file = base_dir / "data" / "raw" / "ibge_setores" / "limite_pelotas.geojson"
+    pontos_dir = base_dir / "data" / "raw" / "cnes"
+    pontos_candidates = [
+        pontos_dir / f"ubs_{slug}_pontos.csv",
+        pontos_dir / f"{slug}_ubs_pontos.csv",  # compatibilidade com naming anterior
+    ]
+    pontos_csv = next((p for p in pontos_candidates if p.exists()), pontos_candidates[0])
+    limite_file = base_dir / "data" / "raw" / "ibge_setores" / f"limite_{slug}.geojson"
     out_file = base_dir / "data" / "processed" / "territorios_voronoi_ubs.geojson"
 
     if not pontos_csv.exists():
-        raise FileNotFoundError(f"Pontos CNES não encontrado: {pontos_csv}")
+        listed = ", ".join(str(p) for p in pontos_candidates)
+        raise FileNotFoundError(f"Pontos CNES não encontrado. Esperado um destes arquivos: {listed}")
 
     df = pd.read_csv(pontos_csv, dtype=str)
     required_cols = {"cnes", "nome", "latitude", "longitude"}
@@ -177,11 +205,17 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407") -> dict:
         crs=CRS_GEO,
     ).to_crs(CRS_UTM_22S)
 
-    limite_path = _resolve_limite_municipal(base_dir, municipio_ibge, limite_file)
-    limite = gpd.read_file(limite_path).to_crs(CRS_UTM_22S)
-    if limite.empty:
-        raise ValueError("Limite municipal vazio")
-    limite_union = unary_union(limite.geometry)
+    try:
+        limite_path = _resolve_limite_municipal(base_dir, municipio_ibge, limite_file, slug=slug)
+        limite = gpd.read_file(limite_path).to_crs(CRS_UTM_22S)
+        if limite.empty:
+            raise ValueError("Limite municipal vazio")
+        limite_union = unary_union(limite.geometry)
+    except Exception as e:  # noqa: BLE001
+        # Fallback final: recorte aproximado usando convex hull dos pontos de UBS.
+        # Mantém o pipeline executável em ambientes sem rede/limite municipal.
+        log.warning("Limite municipal indisponível (%s). Usando convex hull das UBS.", e)
+        limite_union = unary_union(pontos.geometry).convex_hull.buffer(5_000)
 
     coords = np.array([(geom.x, geom.y) for geom in pontos.geometry])
     vor = Voronoi(coords)
@@ -220,18 +254,19 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407") -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Gera Voronoi das UBS de Pelotas")
+    parser = argparse.ArgumentParser(description="Gera Voronoi das UBS por município")
     parser.add_argument(
         "--base-dir",
         default=str(Path(__file__).resolve().parents[1] / "ivs_pelotas"),
-        help="Diretório base do projeto ivs_pelotas",
+        help="Diretório base do projeto (ex.: ivs_betim)",
     )
     parser.add_argument("--municipio", default="4314407", help="Código IBGE do município")
+    parser.add_argument("--slug", default="pelotas", help="Slug para nomes de arquivos")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-8s %(message)s", datefmt="%H:%M:%S")
 
-    res = generate_voronoi(Path(args.base_dir), municipio_ibge=args.municipio)
+    res = generate_voronoi(Path(args.base_dir), municipio_ibge=args.municipio, slug=args.slug)
     log.info(
         "Voronoi concluído: %s polígonos; cobertura %.2f%%; arquivo %s",
         res["n_poligonos"],

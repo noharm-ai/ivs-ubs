@@ -2,13 +2,11 @@
 gerar_pagina_pelotas.py
 =======================
 Gera index.html com mapa Leaflet interativo e tabela de indicadores
-para os 55 territórios de UBS de Pelotas.
-
-Uso:
-    python src/gerar_pagina_pelotas.py
+para territórios de UBS do município configurado.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 from pathlib import Path
@@ -21,8 +19,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(
 log = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parents[1]
+DEFAULT_SLUG = "pelotas"
+DEFAULT_CIDADE = "Pelotas"
 PROC = BASE / "ivs_pelotas" / "data" / "processed"
 OUT_HTML = BASE / "index.html"
+IVS_FILE = PROC / "ivs_pelotas.csv"
+NOME_CIDADE = DEFAULT_CIDADE
 
 # ---------------------------------------------------------------------------
 # Indicadores disponíveis por dimensão
@@ -57,6 +59,14 @@ CORES_IVS = [
     (0.66, "#e67e22"),
     (1.00, "#c0392b"),
 ]
+
+
+def _configure_runtime(base_dir: Path, slug: str, cidade: str, out_html: Path | None = None) -> None:
+    global PROC, OUT_HTML, IVS_FILE, NOME_CIDADE
+    PROC = base_dir.resolve() / "data" / "processed"
+    IVS_FILE = PROC / f"ivs_{slug}.csv"
+    OUT_HTML = out_html.resolve() if out_html else Path(__file__).resolve().parents[1] / "index.html"
+    NOME_CIDADE = cidade
 
 
 def normalizar_mm(serie: pd.Series) -> pd.Series:
@@ -177,6 +187,7 @@ def gerar_html(df: pd.DataFrame, geojson_str: str) -> str:
         </tr>"""
 
     # --- GeoJSON com IVS embutido para o mapa ---
+    df["id_ubs"] = df["id_ubs"].astype(str).str.strip()
     ivs_map = df.set_index("id_ubs")["ivs_parcial"].to_dict()
     cor_map = df.set_index("id_ubs").apply(
         lambda r: interpolate_color(r["ivs_parcial"]), axis=1
@@ -188,11 +199,11 @@ def gerar_html(df: pd.DataFrame, geojson_str: str) -> str:
     geojson = json.loads(geojson_str)
     for feat in geojson["features"]:
         cnes = str(feat["properties"].get("cnes", ""))
-        feat["properties"]["ivs"] = round(ivs_map.get(int(cnes), 0), 3) if cnes else 0
-        feat["properties"]["cor"] = cor_map.get(int(cnes), "#999") if cnes else "#999"
-        feat["properties"]["nome"] = nome_map.get(int(cnes), cnes) if cnes else cnes
-        feat["properties"]["sem_saneam"] = round(saneam_map.get(int(cnes), 0), 1) if cnes else 0
-        feat["properties"]["analf"] = round(analf_map.get(int(cnes), 0), 1) if cnes else 0
+        feat["properties"]["ivs"] = round(ivs_map.get(cnes, 0), 3) if cnes else 0
+        feat["properties"]["cor"] = cor_map.get(cnes, "#999") if cnes else "#999"
+        feat["properties"]["nome"] = nome_map.get(cnes, cnes) if cnes else cnes
+        feat["properties"]["sem_saneam"] = round(saneam_map.get(cnes, 0), 1) if cnes else 0
+        feat["properties"]["analf"] = round(analf_map.get(cnes, 0), 1) if cnes else 0
 
     geojson_enriched = json.dumps(geojson)
 
@@ -201,8 +212,8 @@ def gerar_html(df: pd.DataFrame, geojson_str: str) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>IVSaúde Pelotas</title>
-<meta name="description" content="Índice de Vulnerabilidade em Saúde — 55 territórios de UBS de Pelotas. Dados IBGE Censo 2022.">
+<title>IVSaúde {NOME_CIDADE}</title>
+<meta name="description" content="Índice de Vulnerabilidade em Saúde — territórios de UBS de {NOME_CIDADE}. Dados IBGE Censo 2022.">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
@@ -247,7 +258,7 @@ footer a{{color:#2980b9;text-decoration:none}}
 <body>
 
 <div class="hero">
-  <h1>IVSaúde Pelotas</h1>
+  <h1>IVSaúde {NOME_CIDADE}</h1>
   <p>Índice de Vulnerabilidade em Saúde dos Territórios das Unidades Básicas de Saúde</p>
   <p class="sub">Dados IBGE Censo 2022 · Metodologia Determinantes Sociais da Saúde (Dahlgren &amp; Whitehead, 1991)</p>
   <div class="badges">
@@ -261,7 +272,7 @@ footer a{{color:#2980b9;text-decoration:none}}
 
 <div class="container">
 
-  <div class="section-title">Resumo — Pelotas (Censo IBGE 2022)</div>
+  <div class="section-title">Resumo — {NOME_CIDADE} (Censo IBGE 2022)</div>
   <div class="stats-grid">
     <div class="stat"><div class="stat-val">{n_ubs}</div><div class="stat-lbl">UBS avaliadas</div></div>
     <div class="stat"><div class="stat-val">{ivs_mean:.3f}</div><div class="stat-lbl">IVS médio parcial</div></div>
@@ -325,21 +336,21 @@ footer a{{color:#2980b9;text-decoration:none}}
       <li><strong>D4 — Saúde do Adolescente:</strong> % femininas 10-19 anos (proxy de risco para maternidade adolescente, SINASC sem geocódigo) <em>(Censo IBGE 2022)</em></li>
       <li><strong>D5 — Perfil Demográfico:</strong> % crianças &lt;1 ano (proxy 0-4/5), % adolescentes 10-19, % mulheres 10-49, % idosos 60+ <em>(Censo IBGE 2022)</em></li>
     </ul>
-    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro de Pelotas. D3 é invertido (maior densidade de OSC = menor vulnerabilidade). Territórios definidos por diagrama de Voronoi a partir dos pontos CNES. Fonte: IBGE Censo Demográfico 2022 — Agregados por Setores Censitários; OpenStreetMap via Overpass API.</p>
+    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro do município. D3 é invertido (maior densidade de OSC = menor vulnerabilidade). Territórios definidos por diagrama de Voronoi a partir dos pontos CNES. Fonte: IBGE Censo Demográfico 2022 — Agregados por Setores Censitários; OpenStreetMap via Overpass API.</p>
     <p style="margin-top:8px;color:#888;font-size:.85em">Indicadores ausentes desta versão (fontes pendentes): Bolsa Família, óbitos por causas violentas, cobertura ESF, evasão escolar.</p>
   </div>
 
 </div>
 
 <footer>
-  IVSaúde Pelotas · <a href="https://github.com/noharm-ai/ivs-ubs">github.com/noharm-ai/ivs-ubs</a>
+  IVSaúde {NOME_CIDADE} · <a href="https://github.com/noharm-ai/ivs-ubs">github.com/noharm-ai/ivs-ubs</a>
   · IBGE Censo 2022 · Pipeline open-source
 </footer>
 
 <script>
 const geojson = {geojson_enriched};
 
-const map = L.map('map').setView([-31.77, -52.34], 11);
+const map = L.map('map').setView([-14.24, -51.93], 4);
 
 L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
@@ -395,8 +406,31 @@ map.fitBounds(geojsonLayer.getBounds());
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Gera página IVSaúde por município")
+    parser.add_argument(
+        "--base-dir",
+        default=str(Path(__file__).resolve().parents[1] / "ivs_pelotas"),
+        help="Diretório base de dados (ex.: ivs_betim)",
+    )
+    parser.add_argument("--slug", default=DEFAULT_SLUG, help="Slug do município (ex.: betim)")
+    parser.add_argument("--cidade", default=DEFAULT_CIDADE, help="Nome da cidade para exibição")
+    parser.add_argument(
+        "--out-html",
+        default=str(Path(__file__).resolve().parents[1] / "index.html"),
+        help="Arquivo HTML de saída",
+    )
+    args = parser.parse_args()
+
+    _configure_runtime(Path(args.base_dir), slug=args.slug, cidade=args.cidade, out_html=Path(args.out_html))
+    log.info("Configuração ativa: base_dir=%s, slug=%s, cidade=%s, out=%s", args.base_dir, args.slug, args.cidade, OUT_HTML)
+
     log.info("Carregando dados...")
-    df = pd.read_csv(PROC / "ivs_pelotas.csv")
+    if not IVS_FILE.exists():
+        legacy = PROC / "ivs_pelotas.csv"
+        ivs_file = legacy if legacy.exists() else IVS_FILE
+    else:
+        ivs_file = IVS_FILE
+    df = pd.read_csv(ivs_file, dtype={"id_ubs": str})
     geojson_path = PROC / "territorios_voronoi_ubs.geojson"
     geojson_str = geojson_path.read_text(encoding="utf-8")
 
