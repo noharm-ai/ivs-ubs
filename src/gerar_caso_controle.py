@@ -283,7 +283,7 @@ td.pair-sep {{ background: #dde3ea !important; height: 2px; padding: 0; }}
   <h2>Legenda</h2>
   <div class="legend-box">
     <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Caso (grupo de referência)</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Controle (pareado por IVS semelhante)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Controle (pareado por IVS+Pop semelhantes)</div>
     <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Porto Alegre</div>
     <div class="legend-item"><div class="legend-dot" style="background:#8e44ad"></div> Pelotas</div>
     <div class="legend-item"><div class="legend-dot" style="background:#16a085"></div> Betim</div>
