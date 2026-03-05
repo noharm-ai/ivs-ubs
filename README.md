@@ -71,11 +71,11 @@ python src/gerar_pagina_municipio.py
 
 | Dimensão | Peso | Indicadores implementados |
 |----------|------|---------------------------|
-| D1 — Condição Socioeconômica | 0,20 | `% analfabetismo 15+`, `% população preta+parda` |
-| D2 — Habitação e Saneamento | 0,20 | `% sem saneamento adequado`, `% sem coleta de lixo` |
-| D3 — Capital Social | 0,20 | `entidades comunitárias por 1.000 hab` *(invertido)* |
-| D4 — Saúde do Adolescente | 0,20 | `% população feminina 10-19 anos` *(proxy)* |
-| D5 — Perfil Demográfico | 0,20 | `% <1 ano (proxy)`, `% adolescentes`, `% mulheres 10-49`, `% idosos 60+` |
+| D1 — Condição Socioeconômica | 0,50 | `% analfabetismo 15+`, `% população preta+parda` |
+| D2 — Habitação e Saneamento | 0,30 | `% sem saneamento adequado`, `% sem coleta de lixo`, `% crianças 0-3 fora da creche`, `% crianças 5-14 fora do fundamental` |
+| D3 — Capital Social | 0,10 | `entidades comunitárias por 1.000 hab` *(invertido)* |
+| D4 — Saúde do Adolescente | 0,08 | `% população feminina 10-19 anos` *(proxy)* |
+| D5 — Perfil Demográfico | 0,02 | `% <1 ano (proxy)`, `% adolescentes`, `% mulheres 10-49`, `% idosos 60+` |
 
 ### Etapas de cálculo
 
@@ -104,7 +104,7 @@ score = (valor - min) / (max - min)
 IVS:
 
 ```text
-IVS = D1×0,20 + D2×0,20 + D3×0,20 + D4×0,20 + D5×0,20
+IVS = D1×0,50 + D2×0,30 + D3×0,10 + D4×0,08 + D5×0,02
 ```
 
 Classes de vulnerabilidade:

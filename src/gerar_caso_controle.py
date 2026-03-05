@@ -2,7 +2,8 @@
 Gera página HTML interativa para design de estudo caso-controle.
 
 Segmenta UBS de Porto Alegre, Pelotas e Betim em grupos caso/controle
-com base no IVS, pareando dentro de cada cidade por proximidade de população.
+com base no IVS, pareando dentro de cada cidade por score ponderado
+de população e IVS.
 
 Uso:
     python src/gerar_caso_controle.py
@@ -221,7 +222,7 @@ td.pair-sep {{ background: #dde3ea !important; height: 2px; padding: 0; }}
 
 <div class="header">
   <h1>Estudo Caso-Controle — IVSaúde UBS</h1>
-  <p>Pareamento aleatório de unidades por vulnerabilidade e porte populacional · Porto Alegre · Pelotas · Betim</p>
+  <p>Pareamento aleatório de unidades por vulnerabilidade, população e IVS · Porto Alegre · Pelotas · Betim</p>
 </div>
 
 <div class="layout">
@@ -262,6 +263,16 @@ td.pair-sep {{ background: #dde3ea !important; height: 2px; padding: 0; }}
   </div>
 
   <div class="control-group">
+    <label>Peso do IVS no pareamento</label>
+    <input type="range" id="pesoIVS" min="0" max="100" step="10" value="50"
+           oninput="document.getElementById('vPesoIVS').textContent=this.value+'%'">
+    <div class="range-val" id="vPesoIVS">50%</div>
+    <div style="display:flex;justify-content:space-between;font-size:.7em;color:#aaa;margin-top:2px">
+      <span>só população</span><span>só IVS</span>
+    </div>
+  </div>
+
+  <div class="control-group">
     <label>Semente aleatória</label>
     <input type="number" id="seed" value="42" min="1" max="9999">
   </div>
@@ -271,8 +282,8 @@ td.pair-sep {{ background: #dde3ea !important; height: 2px; padding: 0; }}
 
   <h2>Legenda</h2>
   <div class="legend-box">
-    <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Caso (alta vulnerabilidade)</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Controle (baixa vulnerabilidade)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div> Caso (grupo de referência)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Controle (pareado por IVS semelhante)</div>
     <div class="legend-item"><div class="legend-dot" style="background:#2980b9"></div> Porto Alegre</div>
     <div class="legend-item"><div class="legend-dot" style="background:#8e44ad"></div> Pelotas</div>
     <div class="legend-item"><div class="legend-dot" style="background:#16a085"></div> Betim</div>
@@ -282,7 +293,8 @@ td.pair-sep {{ background: #dde3ea !important; height: 2px; padding: 0; }}
   <p style="font-size:.78em;color:#555;line-height:1.5">
     UBS são classificadas como <em>caso</em> ou <em>controle</em> pelo IVS calculado
     (Censo IBGE 2022 · INEP · OSM). Pareamento 1:N dentro da mesma cidade,
-    priorizando controles com população mais próxima ao caso (tolerância configurável).
+    por score ponderado de proximidade populacional e proximidade de IVS
+    (com tolerância populacional configurável e fallback quando necessário).
     Seleção aleatória com semente reproduzível.
   </p>
 </div>
@@ -362,8 +374,21 @@ function fmtPop(p) {{
 }}
 
 // ── Matching ────────────────────────────────────────────────────────────────
-function match(cidades, casos, controles, ratio, tolPop, rng) {{
+function match(cidades, casos, controles, ratio, tolPop, pesoIVS, rng) {{
   const result = {{}};  // cidade -> {{pairs: [], unpairedCasos: [], unpairedControles: []}}
+  const wIVS = Math.max(0, Math.min(1, pesoIVS));
+  const wPop = 1 - wIVS;
+
+  const popDiffRel = (a, b) => {{
+    if (!a.pop || !b.pop) return 1;
+    return Math.abs(a.pop - b.pop) / a.pop;
+  }};
+
+  const matchScore = (caso, ctrl) => {{
+    const dPop = popDiffRel(caso, ctrl);
+    const dIvs = Math.abs((caso.ivs ?? 0) - (ctrl.ivs ?? 0));
+    return (wPop * dPop) + (wIVS * dIvs);
+  }};
 
   for (const cidade of cidades) {{
     const casosC = shuffle(casos.filter(u => u.cidade === cidade), rng);
@@ -376,26 +401,29 @@ function match(cidades, casos, controles, ratio, tolPop, rng) {{
       // Candidatos: controles não usados dentro da tolerância populacional
       let candidatos = controlesC.filter(c => {{
         if (used.has(c.id)) return false;
+        if (c.id === caso.id) return false;
         if (caso.pop === 0 || c.pop === 0) return true;
         const diff = Math.abs(c.pop - caso.pop) / caso.pop;
         return diff <= tolPop / 100;
       }});
 
-      // Ordenar por proximidade de população
+      // Ordenar por score ponderado (população + IVS)
       candidatos.sort((a, b) =>
-        Math.abs(a.pop - caso.pop) - Math.abs(b.pop - caso.pop)
+        matchScore(caso, a) - matchScore(caso, b)
       );
 
-      // Adicionar aleatoriedade entre os mais próximos (top 2× ratio)
+      // Adicionar aleatoriedade entre os melhores candidatos (top 2× ratio)
       const pool = candidatos.slice(0, ratio * 2);
       shuffle(pool, rng);
-      const escolhidos = pool.slice(0, ratio);
+      const escolhidos = pool
+        .sort((a, b) => matchScore(caso, a) - matchScore(caso, b))
+        .slice(0, ratio);
 
       if (escolhidos.length === 0) {{
-        // sem tolerância: pegar mais próximos globalmente
+        // Sem candidato na tolerância populacional: buscar no conjunto global.
         const fallback = controlesC
-          .filter(c => !used.has(c.id))
-          .sort((a,b) => Math.abs(a.pop-caso.pop) - Math.abs(b.pop-caso.pop))
+          .filter(c => !used.has(c.id) && c.id !== caso.id)
+          .sort((a, b) => matchScore(caso, a) - matchScore(caso, b))
           .slice(0, ratio);
         if (fallback.length === 0) {{
           unpairedCasos.push(caso);
@@ -423,6 +451,7 @@ function run() {{
   const limControle = parseFloat(document.getElementById('limiarControle').value);
   const ratio       = parseInt(document.getElementById('ratio').value);
   const tolPop      = parseFloat(document.getElementById('tolPop').value);
+  const pesoIVS     = parseFloat(document.getElementById('pesoIVS').value) / 100;
   const seed        = parseInt(document.getElementById('seed').value) || 42;
   const rng         = seededRng(seed);
 
@@ -430,8 +459,8 @@ function run() {{
   const controles = UBS_DATA.filter(u => u.ivs <= limControle);
   const cidades   = [...new Set(UBS_DATA.map(u => u.cidade))];
 
-  const resultado = match(cidades, casos, controles, ratio, tolPop, rng);
-  lastResult = {{ resultado, limCaso, limControle, ratio, tolPop, seed }};
+  const resultado = match(cidades, casos, controles, ratio, tolPop, pesoIVS, rng);
+  lastResult = {{ resultado, limCaso, limControle, ratio, tolPop, pesoIVS, seed }};
 
   // Stats globais
   let totalPares = 0, totalCasos = 0, totalCont = 0, totalNPar = 0;
@@ -457,7 +486,7 @@ function run() {{
     <div class="stat-card">
       <div class="label">Pares formados</div>
       <div class="value" style="color:#27ae60">${{totalPares}}</div>
-      <div class="sub">Razão 1:${{ratio}} · semente ${{seed}}</div>
+      <div class="sub">Razão 1:${{ratio}} · IVS ${{Math.round(pesoIVS*100)}}% · semente ${{seed}}</div>
     </div>
     <div class="stat-card">
       <div class="label">Controles alocados</div>
