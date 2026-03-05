@@ -1,0 +1,12 @@
+geopandas>=0.14
+pandas>=2.0
+numpy>=1.25
+matplotlib>=3.8
+folium>=0.16
+requests>=2.31
+openpyxl>=3.1
+scipy>=1.11
+shapely>=2.0
+pyproj>=3.6
+# Opcional — para ler arquivos DBC do DataSUS:
+# pysus>=0.10
