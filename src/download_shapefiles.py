@@ -25,14 +25,18 @@ Flags:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
+import re
 import sys
 import time
 import zipfile
+from datetime import date
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
+import xml.etree.ElementTree as ET
 
 import requests
 
@@ -44,6 +48,7 @@ RAW = Path(__file__).resolve().parents[1] / "data" / "raw"
 COD_MUNICIPIO_IBGE = "4314902"   # Porto Alegre
 COD_UF = "RS"
 UF_IBGE_NUM = "43"               # código numérico do RS no IBGE
+CNES_TP_UNIDADE_UBS = "02"       # Unidade Básica/Centro de Saúde (schema XML CNES)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +96,121 @@ def download(url: str, dest: Path, session: Optional[requests.Session] = None,
     return dest
 
 
+def _http_exists(url: str, session: Optional[requests.Session] = None, timeout: int = 30) -> bool:
+    """Retorna True se a URL responder com status HTTP < 400."""
+    s = session or _session()
+    try:
+        r = s.head(url, timeout=timeout, allow_redirects=True)
+        if r.status_code < 400:
+            return True
+        # Alguns servidores não suportam HEAD corretamente.
+        if r.status_code in (403, 405):
+            with s.get(url, timeout=timeout, stream=True, allow_redirects=True) as g:
+                return g.status_code < 400
+        return False
+    except requests.RequestException:
+        return False
+
+
+def _list_zip_links(dir_url: str, session: Optional[requests.Session] = None,
+                    timeout: int = 30) -> list[str]:
+    """Lista links .zip em um índice HTTP de diretório."""
+    s = session or _session()
+    try:
+        r = s.get(dir_url, timeout=timeout)
+        r.raise_for_status()
+    except requests.RequestException:
+        return []
+
+    links = re.findall(r"""href=["']?([^"'>\s]+\.zip)""", r.text, flags=re.IGNORECASE)
+    out: list[str] = []
+    seen: set[str] = set()
+    for link in links:
+        abs_url = urljoin(dir_url, link)
+        if abs_url not in seen:
+            seen.add(abs_url)
+            out.append(abs_url)
+    return out
+
+
+def _month_sequence(n: int = 12, include_current: bool = False) -> list[str]:
+    """Retorna competências AAAAMM, da mais recente para a mais antiga."""
+    ref = date.today()
+    year = ref.year
+    month = ref.month if include_current else ref.month - 1
+    if month == 0:
+        month = 12
+        year -= 1
+
+    comps: list[str] = []
+    for _ in range(n):
+        comps.append(f"{year}{month:02d}")
+        month -= 1
+        if month == 0:
+            month = 12
+            year -= 1
+    return comps
+
+
+def _first_non_empty(props: dict, keys: list[str]) -> str:
+    for k in keys:
+        v = props.get(k)
+        if v is not None and str(v).strip() != "":
+            return str(v).strip()
+    return ""
+
+
+def _load_cnes_ids(path: Path) -> set[str]:
+    if not path.exists():
+        return set()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            return set()
+        ids = {
+            _first_non_empty(r if isinstance(r, dict) else {}, ["co_cnes", "CO_CNES", "nu_cnes", "NU_CNES"])
+            for r in raw
+        }
+        return {i for i in ids if i}
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _normalize_ubs_geojson(src: Path, dest: Path) -> tuple[int, set[str]]:
+    """
+    Normaliza campos de identificação da UBS em GeoJSON:
+      - co_cnes
+      - no_fantasia
+    """
+    obj = json.loads(src.read_text(encoding="utf-8"))
+    features = obj.get("features", []) if isinstance(obj, dict) else []
+    if not isinstance(features, list):
+        raise ValueError("GeoJSON inválido: 'features' ausente")
+
+    cnes_ids: set[str] = set()
+    for feat in features:
+        if not isinstance(feat, dict):
+            continue
+        props = feat.get("properties")
+        if not isinstance(props, dict):
+            props = {}
+            feat["properties"] = props
+        co_cnes = _first_non_empty(props, ["co_cnes", "CO_CNES", "cnes", "CNES", "nu_cnes", "NU_CNES"])
+        no_fantasia = _first_non_empty(
+            props,
+            ["no_fantasia", "NO_FANTASIA", "nome", "NOME", "UBS", "unidade", "NO_UNIDADE"],
+        )
+        if co_cnes:
+            props["co_cnes"] = co_cnes
+            cnes_ids.add(co_cnes)
+        if no_fantasia:
+            props["no_fantasia"] = no_fantasia
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(obj, ensure_ascii=False), encoding="utf-8")
+    return len(features), cnes_ids
+
+
 def unzip(archive: Path, dest_dir: Optional[Path] = None) -> Path:
     """Descompacta um ZIP no diretório indicado (padrão: mesmo diretório)."""
     dest_dir = dest_dir or archive.parent
@@ -116,13 +236,45 @@ def download_ibge_setores(skip_large: bool = False) -> None:
     """
     log.info("=== IBGE — Setores Censitários 2022 (%s) ===", COD_UF)
 
-    base = (
+    s = _session()
+    base_dirs = [
         "https://geoftp.ibge.gov.br/organizacao_do_territorio/"
         "malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/"
-        "censo_2022/setores_censitarios_shp/"
-    )
-    filename = f"SC_Intra_{COD_UF}_2022.zip"
-    url = urljoin(base, f"{COD_UF}/{filename}")
+        "censo_2022/setores_censitarios_shp/",
+        "https://geoftp.ibge.gov.br/organizacao_do_territorio/"
+        "malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/"
+        "censo_2022/setores_censitarios/",
+    ]
+    filename_candidates = [
+        f"SC_Intra_{COD_UF}_2022.zip",
+        f"SC_2022_{COD_UF}.zip",
+        f"SC_{COD_UF}_2022.zip",
+    ]
+
+    candidate_urls: list[str] = []
+    for base in base_dirs:
+        uf_dir = urljoin(base, f"{COD_UF}/")
+        for filename in filename_candidates:
+            candidate_urls.append(urljoin(uf_dir, filename))
+        # Tenta descobrir nome real do ZIP no índice do diretório.
+        for link in _list_zip_links(uf_dir, session=s):
+            link_up = link.upper()
+            if COD_UF in link_up and "2022" in link_up:
+                candidate_urls.insert(0, link)
+
+    url = next((u for u in candidate_urls if _http_exists(u, session=s)), None)
+    if not url:
+        manual_url = candidate_urls[0] if candidate_urls else ""
+        _write_stub(
+            RAW / "ibge_setores" / "DOWNLOAD_MANUAL.txt",
+            f"Baixar manualmente:\n{manual_url}\n\n"
+            "Se o arquivo mudou de nome, abra o diretório do estado no GeoFTP IBGE.\n"
+            "Extrair em: data/raw/ibge_setores/\n",
+        )
+        log.warning("  não foi possível resolver URL automática dos setores IBGE")
+        return
+
+    filename = Path(urlparse(url).path).name
     dest = RAW / "ibge_setores" / filename
 
     if skip_large:
@@ -132,7 +284,7 @@ def download_ibge_setores(skip_large: bool = False) -> None:
                     "Extrair em: data/raw/ibge_setores/\n")
         return
 
-    archive = download(url, dest)
+    archive = download(url, dest, session=s)
     unzip(archive, dest.parent)
 
     # Tabelas de resultados do Universo (Censo 2022) — basico_RS
@@ -141,21 +293,99 @@ def download_ibge_setores(skip_large: bool = False) -> None:
         "https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022/"
         "Resultados_do_Universo/Agregados_por_Setores_Censitarios/"
     )
-    # Arquivo compactado por UF
-    tab_file = f"RS_20231030.zip"
-    tab_url = tabelas_base + tab_file
+    # Arquivo compactado por UF (nome pode mudar conforme atualização do IBGE)
+    universe_candidates = [tabelas_base + "RS_20231030.zip"]
+    for link in _list_zip_links(tabelas_base, session=s):
+        name = Path(urlparse(link).path).name.upper()
+        if name.startswith("RS_") and name.endswith(".ZIP"):
+            universe_candidates.insert(0, link)
+
+    tab_url = next((u for u in universe_candidates if _http_exists(u, session=s)), None)
+    if skip_large:
+        manual_url = tab_url or universe_candidates[0]
+        _write_stub(RAW / "ibge_universo" / "DOWNLOAD_MANUAL.txt",
+                    f"Baixar manualmente:\n{manual_url}\n\nExtrair em: data/raw/ibge_universo/\n")
+        return
+
+    if not tab_url:
+        log.warning("  não foi possível resolver URL do Universo IBGE automaticamente")
+        _write_stub(
+            RAW / "ibge_universo" / "DOWNLOAD_MANUAL.txt",
+            "Baixar manualmente no diretório oficial de agregados por setores censitários do IBGE.\n"
+            "Extrair em: data/raw/ibge_universo/\n",
+        )
+        return
+
+    tab_file = Path(urlparse(tab_url).path).name
     tab_dest = RAW / "ibge_universo" / tab_file
-    if not skip_large:
-        archive2 = download(tab_url, tab_dest)
-        unzip(archive2, tab_dest.parent)
-    else:
-        _write_stub(tab_dest.parent / "DOWNLOAD_MANUAL.txt",
-                    f"Baixar manualmente:\n{tab_url}\n\nExtrair em: data/raw/ibge_universo/\n")
+    archive2 = download(tab_url, tab_dest, session=s)
+    unzip(archive2, tab_dest.parent)
 
 
 # ---------------------------------------------------------------------------
 # 2. CNES — georreferenciamento das UBS
 # ---------------------------------------------------------------------------
+
+def _xml_localname(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    return tag
+
+
+def _extract_cnes_from_xml(xml_path: Path, dest: Path,
+                           municipio_ibge: str = COD_MUNICIPIO_IBGE,
+                           tp_unidade: str = CNES_TP_UNIDADE_UBS) -> int:
+    """
+    Extrai registros de UBS de um XML CNES grande em modo streaming (iterparse).
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    registros: list[dict[str, str]] = []
+    total_lidos = 0
+    total_filtrados = 0
+    municipio_alvo_6 = municipio_ibge[:6]
+
+    for _, elem in ET.iterparse(xml_path, events=("start",)):
+        if _xml_localname(elem.tag).upper() != "ROW":
+            continue
+        total_lidos += 1
+        attrs = dict(elem.attrib)
+        municipio = (attrs.get("CO_MUNICIPIO_GESTOR")
+                     or attrs.get("CO_MUNICIPIO")
+                     or "")
+        tipo = (attrs.get("TP_UNIDADE")
+                or attrs.get("CO_TIPO_UNIDADE")
+                or "")
+        if municipio not in (municipio_ibge, municipio_alvo_6):
+            continue
+        if tp_unidade and tipo and tipo.zfill(2) != tp_unidade.zfill(2):
+            continue
+
+        # Preserva todos os campos em minúsculas e normaliza os principais.
+        rec = {k.lower(): v for k, v in attrs.items()}
+        rec["co_cnes"] = attrs.get("CO_CNES", rec.get("co_cnes", ""))
+        rec["nu_cnes"] = rec["co_cnes"]
+        rec["no_fantasia"] = attrs.get("NO_FANTASIA", rec.get("no_fantasia", ""))
+        rec["co_municipio_gestor"] = municipio
+        rec["tp_unidade"] = tipo
+
+        lat_key = next((k for k in attrs.keys() if "LAT" in k.upper()), None)
+        lon_key = next((k for k in attrs.keys() if "LON" in k.upper() or "LNG" in k.upper()), None)
+        if lat_key and "nu_latitude" not in rec:
+            rec["nu_latitude"] = attrs.get(lat_key, "")
+        if lon_key and "nu_longitude" not in rec:
+            rec["nu_longitude"] = attrs.get(lon_key, "")
+
+        registros.append(rec)
+        total_filtrados += 1
+        elem.clear()
+
+    log.info("  XML CNES lido: %d registros, %d filtrados (POA/UBS)", total_lidos, total_filtrados)
+    if total_filtrados == 0:
+        return 0
+    dest.write_text(json.dumps(registros, ensure_ascii=False), encoding="utf-8")
+    log.info("  salvo: %s", dest.name)
+    return total_filtrados
+
 
 def download_cnes_ubs() -> None:
     """
@@ -178,20 +408,48 @@ def download_cnes_ubs() -> None:
         return
 
     s = _session()
-    try:
-        r = s.get(url, timeout=30)
-        r.raise_for_status()
-        dest.write_bytes(r.content)
-        log.info("  salvo: %s", dest.name)
-    except requests.RequestException as e:
-        log.warning("  falha CNES API: %s", e)
-        _write_stub(
-            dest.parent / "DOWNLOAD_MANUAL.txt",
-            "Acesse: https://cnes.datasus.gov.br\n"
-            "Menu: Downloads > Estabelecimentos\n"
-            f"Filtrar: Município={COD_MUNICIPIO_IBGE}, Tipo=UBS\n"
-            "Salvar como: data/raw/cnes/ubs_poa.csv\n",
-        )
+    for tentativa in range(1, 4):
+        try:
+            r = s.get(url, timeout=30)
+            r.raise_for_status()
+            dest.write_bytes(r.content)
+            log.info("  salvo: %s", dest.name)
+            return
+        except requests.RequestException as e:
+            log.warning("  falha CNES API (tentativa %d/3): %s", tentativa, e)
+            if tentativa < 3:
+                time.sleep(2 * tentativa)
+
+    # Fallback local: XML CNES completo (streaming para suportar arquivo grande em 1 linha).
+    xml_candidates = [
+        Path(os.environ.get("CNES_XML_PATH", "")) if os.environ.get("CNES_XML_PATH") else None,
+        Path(__file__).resolve().parents[1] / "data" / "CNESBRASIL" / "xmlCNES.xml",
+        Path("data/CNESBRASIL/xmlCNES.xml"),
+    ]
+    seen_xml: set[Path] = set()
+    for xml_path in xml_candidates:
+        if not xml_path or not xml_path.exists():
+            continue
+        xml_real = xml_path.resolve()
+        if xml_real in seen_xml:
+            continue
+        seen_xml.add(xml_real)
+        try:
+            log.info("  API indisponível; usando XML local: %s", xml_real)
+            n = _extract_cnes_from_xml(xml_real, dest)
+            if n > 0:
+                return
+            log.warning("  XML local encontrado, mas sem registros para POA/UBS")
+        except Exception as e:  # noqa: BLE001
+            log.warning("  falha ao processar XML CNES local (%s): %s", xml_real, e)
+
+    _write_stub(
+        dest.parent / "DOWNLOAD_MANUAL.txt",
+        "Acesse: https://cnes.datasus.gov.br\n"
+        "Menu: Downloads > Estabelecimentos\n"
+        f"Filtrar: Município={COD_MUNICIPIO_IBGE}, Tipo=UBS\n"
+        "Salvar como: data/raw/cnes/ubs_poa.csv\n",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -200,17 +458,15 @@ def download_cnes_ubs() -> None:
 
 def download_ubs_shapefile() -> None:
     """
-    Tenta baixar o shapefile de territórios das UBS de Porto Alegre.
+    Tenta baixar o shapefile de territórios das UBS da API WFS do GeoSampa.
 
-    Fontes tentadas (em ordem):
-      1. Portal de Dados Abertos de POA (dadosabertos.poa.br) — grupo Saúde
-      2. GIS-SMAMUS (gis-smamus.portoalegre.rs.gov.br) — ArcGIS REST
-    Se todas falharem, gera instruções manuais e fallback Voronoi.
+    Layer: 'ugeo:ds_ubs_areas' (áreas de abrangência de UBS — SMS POA).
+    Se falhar, gera instruções manuais e um script alternativo com Voronoi.
 
-    ATENÇÃO: GeoSampa (geosampa.prefpoa.com.br) é o geoportal de São Paulo
-    e NÃO existe em Porto Alegre. O portal correto é o GIS-SMAMUS/SMS-POA.
+    GeoSampa WFS:
+    https://geosampa.prefpoa.com.br/geoserver/ugeo/wfs
     """
-    log.info("=== SMS-POA — Territórios das 141 UBS ===")
+    log.info("=== GeoSampa — Territórios das 141 UBS ===")
     dest_dir = RAW / "ubs_territorios"
     dest_dir.mkdir(parents=True, exist_ok=True)
     geojson_dest = dest_dir / "territorios_ubs.geojson"
@@ -219,79 +475,123 @@ def download_ubs_shapefile() -> None:
         log.info("  já existe: %s", geojson_dest.name)
         return
 
+    cnes_ids = _load_cnes_ids(RAW / "cnes" / "ubs_poa.json")
+
+    # Tentativa 1: WFS GeoSampa
+    layers_to_try = [
+        ("ugeo:ds_ubs_areas",       "areas de abrangencia UBS"),
+        ("ugeo:ubs",                "pontos UBS"),
+        ("smams:areas_risco",       "areas de risco ambiental"),
+    ]
+
     s = _session()
-
-    # Tentativa 1: Portal Dados Abertos POA — grupo Saúde
-    # Verificar datasets disponíveis em: https://dadosabertos.poa.br/group/saude
-    dados_abertos_urls = [
-        "https://dadosabertos.poa.br/dataset/areas-abrangencia-ubs/resource/territorios-ubs.geojson",
-        "https://dadosabertos.poa.br/dataset/unidades-de-saude/resource/ubs-territorios.geojson",
-    ]
-    for url in dados_abertos_urls:
+    for layer, desc in layers_to_try:
+        url = (
+            "https://geosampa.prefpoa.com.br/geoserver/ugeo/wfs"
+            f"?service=WFS&version=2.0.0&request=GetFeature"
+            f"&typeName={layer}&outputFormat=application/json"
+            f"&srsName=EPSG:4674"
+        )
+        out = dest_dir / f"{layer.replace(':', '_')}.geojson"
         try:
-            log.info("  tentando dados abertos POA: %s", url)
-            r = s.get(url, timeout=30)
-            r.raise_for_status()
-            geojson_dest.write_bytes(r.content)
-            log.info("  salvo: %s", geojson_dest.name)
-            return
-        except requests.RequestException as e:
-            log.warning("  falha: %s", e)
-
-    # Tentativa 2: GIS-SMAMUS ArcGIS REST (camadas públicas)
-    # Explorar layers disponíveis: https://gis-smamus.portoalegre.rs.gov.br/server/rest/services
-    smamus_urls = [
-        (
-            "https://gis-smamus.portoalegre.rs.gov.br/server/rest/services/"
-            "01_PUBLICACOES/saude_ubs/MapServer/0/query"
-            "?where=1%3D1&outFields=*&f=geojson&outSR=4674",
-            dest_dir / "smamus_ubs.geojson",
-        ),
-    ]
-    for url, out in smamus_urls:
-        try:
-            log.info("  tentando GIS-SMAMUS: %s", url)
+            log.info("  WFS layer: %s (%s)", layer, desc)
             r = s.get(url, timeout=60)
             r.raise_for_status()
             out.write_bytes(r.content)
             log.info("  salvo: %s (%.1f MB)", out.name, out.stat().st_size / 1e6)
+            if layer == "ugeo:ds_ubs_areas":
+                try:
+                    n_feat, area_cnes_ids = _normalize_ubs_geojson(out, geojson_dest)
+                    if cnes_ids and area_cnes_ids:
+                        inter = len(cnes_ids.intersection(area_cnes_ids))
+                        log.info("  territórios normalizados: %d feições, %d CNES em comum com CNES local", n_feat, inter)
+                    else:
+                        log.info("  territórios normalizados: %d feições", n_feat)
+                    return
+                except Exception as e:  # noqa: BLE001
+                    log.warning("  falha ao normalizar camada principal de territórios: %s", e)
         except requests.RequestException as e:
-            log.warning("  falha GIS-SMAMUS: %s", e)
+            log.warning("  falha WFS %s: %s", layer, e)
+
+    # Tentativa 2: Portal de dados abertos PMPA
+    dados_abertos_urls = [
+        (
+            "https://dadosabertos.poa.br/dataset/unidades-basicas-saude/resource/"
+            "e1e5e9e2-7e3b-4b9e-9c7b-1e0b0e1e9e2e",
+            dest_dir / "ubs_dadosabertos.geojson",
+        ),
+    ]
+    for url, out in dados_abertos_urls:
+        try:
+            r = s.get(url, timeout=30)
+            r.raise_for_status()
+            out.write_bytes(r.content)
+            log.info("  dados abertos salvo: %s", out.name)
+            try:
+                n_feat, area_cnes_ids = _normalize_ubs_geojson(out, geojson_dest)
+                if cnes_ids and area_cnes_ids:
+                    inter = len(cnes_ids.intersection(area_cnes_ids))
+                    log.info("  territórios normalizados (dados abertos): %d feições, %d CNES em comum", n_feat, inter)
+                else:
+                    log.info("  territórios normalizados (dados abertos): %d feições", n_feat)
+                return
+            except Exception as e:  # noqa: BLE001
+                log.warning("  falha ao normalizar GeoJSON de dados abertos: %s", e)
+        except requests.RequestException:
+            pass  # silencioso — vai gerar manual abaixo
+
+    # Tentativa 3: fallback local (arquivo já baixado manualmente no repositório).
+    local_candidates = [
+        Path(os.environ.get("UBS_AREAS_LOCAL_PATH", "")) if os.environ.get("UBS_AREAS_LOCAL_PATH") else None,
+        Path(__file__).resolve().parents[1] / "data" / "AreaAbrangenciaUBS.geojson",
+        Path("data/AreaAbrangenciaUBS.geojson"),
+    ]
+    force_local = os.environ.get("UBS_AREAS_FORCE", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
+    seen_local: set[Path] = set()
+    for p in local_candidates:
+        if not p or not p.exists():
+            continue
+        real = p.resolve()
+        if real in seen_local:
+            continue
+        seen_local.add(real)
+        try:
+            temp_dest = dest_dir / "_tmp_territorios_ubs_local.geojson"
+            n_feat, area_cnes_ids = _normalize_ubs_geojson(real, temp_dest)
+            if cnes_ids and area_cnes_ids:
+                inter = len(cnes_ids.intersection(area_cnes_ids))
+                if inter == 0:
+                    if force_local:
+                        log.warning("  fallback local forçado com 0 CNES em comum: %s", real)
+                    else:
+                        if temp_dest.exists():
+                            temp_dest.unlink()
+                        log.warning("  fallback local ignorado (%s): 0 CNES em comum com o cadastro CNES de referência", real)
+                        continue
+                log.info("  fallback local aplicado: %s (%d feições, %d CNES em comum)", real, n_feat, inter)
+            else:
+                log.info("  fallback local aplicado: %s (%d feições)", real, n_feat)
+            temp_dest.replace(geojson_dest)
+            return
+        except Exception as e:  # noqa: BLE001
+            log.warning("  falha no fallback local de territórios (%s): %s", real, e)
 
     # Sempre gerar instruções manuais de fallback
     _write_stub(
         dest_dir / "INSTRUCOES_MANUAIS.txt",
-        """FONTES CORRETAS para territórios de UBS em Porto Alegre
-========================================================
-
-Opção A — Portal de Dados Abertos de Porto Alegre:
-  1. Acesse https://dadosabertos.poa.br/group/saude
-  2. Procure dataset "Áreas de Abrangência das UBS" ou "Unidades de Saúde"
-  3. Baixe o arquivo GeoJSON ou Shapefile disponível
+        """Opção A — GeoSampa (navegador):
+  1. Acesse https://geosampa.prefpoa.com.br
+  2. Busque 'UBS' ou 'Unidades Básicas de Saúde'
+  3. Exporte a camada de áreas de abrangência como GeoJSON/Shapefile
   4. Salve em: data/raw/ubs_territorios/territorios_ubs.geojson
 
-Opção B — GIS-SMAMUS (Portal GIS da Prefeitura de Porto Alegre):
-  1. Acesse https://gis-smamus.portoalegre.rs.gov.br/portal/home/
-  2. Pesquise por "UBS" ou "Saúde" nas camadas públicas
-  3. Exporte como GeoJSON com CRS EPSG:4674 (SIRGAS 2000)
-  4. Salve em: data/raw/ubs_territorios/territorios_ubs.geojson
+Opção B — DATASUS / e-SUS APS:
+  https://egestorab.saude.gov.br/paginas/acesso/login.xhtml
+  Menu: Relatórios > Rede de Saúde > Territórios
 
-Opção C — SMS / Territorialização (contato direto):
-  https://prefeitura.poa.br/sms/bvaps-biblioteca-virtual-de-atencao-primaria-saude/territorializacao
-  Solicitar shapefile ao Comitê de Territorialização em Saúde (CMTS)
-  via protocolo SEI ou e-mail para a SMS-POA.
-
-Opção D — Mapa interativo SMS:
-  https://prefeitura.poa.br/sms/onde-esta-o-aedes/mapas
-  Inspecionar as requisições de rede (DevTools > Network) para
-  capturar a URL da API usada pelo mapa interativo.
-
-Opção E — Voronoi pelo CNES (automático, sem shapefile oficial):
+Opção C — Voronoi pelo CNES (automático):
   Execute: python src/gerar_voronoi_ubs.py
-  Gera territórios aproximados a partir dos pontos geocodificados do CNES.
-  Ativar com: python src/calcular_ivs.py --voronoi
-
-ATENÇÃO: "GeoSampa" é o geoportal de SÃO PAULO e não existe em Porto Alegre.
+  Isso gera territórios aproximados a partir dos pontos geocodificados do CNES.
 
 Formato esperado:
   Arquivo GeoJSON com CRS EPSG:4674 (SIRGAS 2000)
@@ -319,30 +619,27 @@ def download_esf_cobertura() -> None:
         log.info("  já existe: %s", dest.name)
         return
 
-    # Competência mais recente — usar AAAAMM
-    from datetime import date
-    competencia = date.today().strftime("%Y%m")
-
-    url = (
-        f"https://egestorab.saude.gov.br/gestaoaps/relCoberturaABEmEsf.xhtml"
-        f"?municipio={COD_MUNICIPIO_IBGE}&competencia={competencia}"
-    )
-    # Tentativa via API (pode requerer autenticação em produção)
-    api_url = (
-        "https://egestorab.saude.gov.br/api/public/relatorios/profissionais/cobertura"
-        f"?municipio={COD_MUNICIPIO_IBGE}&periodo={competencia}"
-    )
+    # Competência mais recente disponível nem sempre é o mês corrente.
+    competencias = _month_sequence(n=18, include_current=False)
     s = _session()
-    for try_url, fname in [(api_url, "cobertura_esf_poa.json")]:
-        out = RAW / "esf" / fname
+    out = RAW / "esf" / "cobertura_esf_poa.json"
+
+    for competencia in competencias:
+        api_url = (
+            "https://egestorab.saude.gov.br/api/public/relatorios/profissionais/cobertura"
+            f"?municipio={COD_MUNICIPIO_IBGE}&periodo={competencia}"
+        )
         try:
-            r = s.get(try_url, timeout=30)
+            r = s.get(api_url, timeout=30)
+            if r.status_code == 404:
+                log.info("  competência sem publicação (%s), tentando anterior...", competencia)
+                continue
             r.raise_for_status()
             out.write_bytes(r.content)
-            log.info("  salvo: %s", out.name)
+            log.info("  salvo: %s (competência %s)", out.name, competencia)
             return
         except requests.RequestException as e:
-            log.warning("  falha e-Gestor APS: %s", e)
+            log.warning("  falha e-Gestor APS (%s): %s", competencia, e)
 
     _write_stub(
         dest.parent / "DOWNLOAD_MANUAL.txt",
@@ -371,59 +668,90 @@ def download_datasus_ftp(skip_large: bool = False) -> None:
     log.info("=== DataSUS FTP — SIM / SINASC / SINAN ===")
 
     ftp_base = "ftp://ftp.datasus.gov.br/dissemin/publicos"
-    # Último triênio disponível (ajuste o ano conforme necessidade)
-    from datetime import date
     ano_atual = date.today().year
-    anos_sim = [str(a)[-2:] for a in range(ano_atual - 3, ano_atual)]
-
-    arquivos = []
-    # SIM — óbitos (arquivo por UF, filtrar POA depois)
-    for ano in anos_sim:
-        arquivos.append((
-            f"{ftp_base}/SIM/CID10/DORES/DORS{COD_UF}{ano}.dbc",
-            RAW / "sim" / f"DORS{COD_UF}{ano}.dbc",
-        ))
-    # SINASC — nascidos vivos
-    for ano in anos_sim:
-        arquivos.append((
-            f"{ftp_base}/SINASC/1996_2022/DNRES/DN{COD_UF}{ano}.dbc",
-            RAW / "sinasc" / f"DN{COD_UF}{ano}.dbc",
-        ))
-    # SINAN — sífilis congênita
-    arquivos.append((
-        f"{ftp_base}/SINAN/DADOS/FINAIS/SIFCRS.dbc",
-        RAW / "sinan" / "SIFCRS.dbc",
-    ))
+    anos = [str(a)[-2:] for a in range(ano_atual - 1, ano_atual - 8, -1)]
+    alvo_por_fonte = 3
 
     if skip_large:
         log.warning("  --skip-large ativo; pulando DataSUS FTP")
-        for _, dest in arquivos:
-            _write_stub(dest.parent / "DOWNLOAD_MANUAL.txt",
-                        f"Baixar via FTP:\n{ftp_base}\n"
-                        "Ou via TabNet: https://datasus.saude.gov.br/transferencia-de-arquivos\n"
-                        "Usar pysus para converter DBC -> DataFrame:\n"
-                        "  import pysus.online_data.SIM as SIM\n"
-                        "  df = SIM.download(state='RS', year=2022)\n")
+        for pasta in ("sim", "sinasc", "sinan"):
+            _write_stub(
+                RAW / pasta / "DOWNLOAD_MANUAL.txt",
+                f"Baixar via FTP:\n{ftp_base}\n"
+                "Ou via TabNet: https://datasus.saude.gov.br/transferencia-de-arquivos\n"
+                "Usar pysus para converter DBC -> DataFrame:\n"
+                "  import pysus.online_data.SIM as SIM\n"
+                "  df = SIM.download(state='RS', year=2022)\n",
+            )
         return
 
-    s = _session()
-    for url, dest in arquivos:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            # FTP via requests não funciona — usar urllib
-            import urllib.request
-            if not (dest.exists() and dest.stat().st_size > 0):
-                log.info("  baixando (FTP): %s", dest.name)
+    import urllib.request
+
+    def _download_ftp_first(candidates: list[str], dest: Path) -> bool:
+        if dest.exists() and dest.stat().st_size > 0:
+            log.info("  já existe: %s", dest.name)
+            return True
+        last_err: Optional[Exception] = None
+        for url in candidates:
+            try:
+                log.info("  baixando (FTP): %s", Path(urlparse(url).path).name)
+                dest.parent.mkdir(parents=True, exist_ok=True)
                 urllib.request.urlretrieve(url, dest)
                 log.info("  salvo: %s (%.1f MB)", dest.name, dest.stat().st_size / 1e6)
-            else:
-                log.info("  já existe: %s", dest.name)
-        except Exception as e:
-            log.warning("  falha FTP %s: %s", dest.name, e)
-            _write_stub(dest.parent / "PYSUS_ALTERNATIVO.txt",
-                        f"# Usar pysus como alternativa:\n"
-                        f"# pip install pysus\n"
-                        f"# python src/download_pysus.py\n")
+                return True
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+        log.warning("  falha FTP %s: %s", dest.name, last_err)
+        return False
+
+    baixados_sim = 0
+    baixados_sinasc = 0
+    for ano in anos:
+        if baixados_sim < alvo_por_fonte:
+            sim_dest = RAW / "sim" / f"DORES{COD_UF}{ano}.dbc"
+            sim_urls = [
+                f"{ftp_base}/SIM/CID10/DORES/DORES{COD_UF}{ano}.dbc",
+            ]
+            if _download_ftp_first(sim_urls, sim_dest):
+                baixados_sim += 1
+
+        if baixados_sinasc < alvo_por_fonte:
+            sinasc_dest = RAW / "sinasc" / f"DNRES{COD_UF}{ano}.dbc"
+            sinasc_urls = [
+                f"{ftp_base}/SINASC/NOV/DNRES/DNRES{COD_UF}{ano}.dbc",
+                f"{ftp_base}/SINASC/1996_2022/DNRES/DNRES{COD_UF}{ano}.dbc",
+            ]
+            if _download_ftp_first(sinasc_urls, sinasc_dest):
+                baixados_sinasc += 1
+
+    sinan_dest = RAW / "sinan" / "SIFCRS.dbc"
+    sinan_urls = [
+        f"{ftp_base}/SINAN/DADOS/FINAIS/SIFCRS.dbc",
+        f"{ftp_base}/SINAN/DADOS/FINAIS/SIFILRS.dbc",
+    ]
+    baixado_sinan = _download_ftp_first(sinan_urls, sinan_dest)
+
+    if baixados_sim == 0:
+        _write_stub(
+            RAW / "sim" / "PYSUS_ALTERNATIVO.txt",
+            "# Usar pysus como alternativa:\n"
+            "# pip install pysus\n"
+            "# python src/download_pysus.py\n",
+        )
+    if baixados_sinasc == 0:
+        _write_stub(
+            RAW / "sinasc" / "PYSUS_ALTERNATIVO.txt",
+            "# Usar pysus como alternativa:\n"
+            "# pip install pysus\n"
+            "# python src/download_pysus.py\n",
+        )
+    if not baixado_sinan:
+        _write_stub(
+            RAW / "sinan" / "PYSUS_ALTERNATIVO.txt",
+            "# Usar pysus como alternativa:\n"
+            "# pip install pysus\n"
+            "# python src/download_pysus.py\n",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -438,13 +766,36 @@ def download_censo_escolar(skip_large: bool = False) -> None:
          microdados/censo-escolar
     """
     log.info("=== INEP — Censo Escolar ===")
-    from datetime import date
-    ano = date.today().year - 1  # último ano publicado
+    s = _session()
+    ano_ref = date.today().year - 1
+    candidatos: list[tuple[str, int]] = []
+    for ano in range(ano_ref, ano_ref - 6, -1):
+        candidatos.extend([
+            (
+                "https://download.inep.gov.br/dados_abertos/microdados/"
+                f"censo_escolar/{ano}/microdados_educacao_basica_{ano}.zip",
+                ano,
+            ),
+            (
+                "https://download.inep.gov.br/dados_abertos/microdados/"
+                f"censo_escolar/{ano}/microdados_censo_escolar_{ano}.zip",
+                ano,
+            ),
+        ])
 
-    url = (
-        f"https://download.inep.gov.br/dados_abertos/microdados/"
-        f"censo_escolar/{ano}/microdados_educacao_basica_{ano}.zip"
-    )
+    escolhido = next(((url, ano) for url, ano in candidatos if _http_exists(url, session=s)), None)
+    if not escolhido:
+        _write_stub(
+            RAW / "censo_escolar" / "DOWNLOAD_MANUAL.txt",
+            "Não foi possível localizar automaticamente o arquivo no INEP.\n"
+            "Baixar em: https://www.gov.br/inep/pt-br/acesso-a-informacao/"
+            "dados-abertos/microdados/censo-escolar\n"
+            "Extrair em: data/raw/censo_escolar/\n",
+        )
+        log.warning("  não foi possível resolver URL automática do Censo Escolar")
+        return
+
+    url, ano = escolhido
     dest = RAW / "censo_escolar" / f"microdados_censo_escolar_{ano}.zip"
 
     if skip_large:
@@ -459,7 +810,7 @@ def download_censo_escolar(skip_large: bool = False) -> None:
         )
         return
 
-    archive = download(url, dest, timeout=300)
+    archive = download(url, dest, timeout=300, session=s)
     # Extrai apenas os arquivos do RS para economizar espaço
     log.info("  extraindo arquivos do %s...", COD_UF)
     with zipfile.ZipFile(archive, "r") as zf:
@@ -488,7 +839,6 @@ def download_bolsa_familia() -> None:
         log.info("  já existe: %s", dest.name)
         return
 
-    from datetime import date
     # Competência: mês anterior
     hoje = date.today()
     if hoje.month == 1:
