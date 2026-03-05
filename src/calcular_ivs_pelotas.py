@@ -13,6 +13,7 @@ Uso:
 """
 from __future__ import annotations
 
+import json
 import logging
 import warnings
 from pathlib import Path
@@ -43,6 +44,7 @@ PROC.mkdir(parents=True, exist_ok=True)
 IBGE_DIR = RAW / "ibge_universo"
 SETOR_GEO = RAW / "ibge_setores" / "setores_pelotas.geojson"
 VORONOI = PROC / "territorios_voronoi_ubs.geojson"
+OSC_FILE = RAW / "osc_pelotas_osm.json"
 
 CRS_GEO = "EPSG:4674"
 CRS_UTM = "EPSG:32722"   # UTM 22S — cálculo de áreas
@@ -209,6 +211,37 @@ def agregar_por_voronoi(
     return df_res
 
 
+def contar_osc_por_territorio(territorios: gpd.GeoDataFrame) -> pd.Series:
+    """
+    Conta entidades comunitárias (OpenStreetMap) por território Voronoi.
+    Retorna Series indexada por id_ubs com contagem de OSC.
+    """
+    if not OSC_FILE.exists():
+        log.warning("OSC JSON não encontrado: %s — D3 será NaN", OSC_FILE.name)
+        return pd.Series(np.nan, index=territorios.set_index("id_ubs").index)
+
+    with open(OSC_FILE, encoding="utf-8") as f:
+        records = json.load(f)
+
+    osc_gdf = gpd.GeoDataFrame(
+        records,
+        geometry=gpd.points_from_xy(
+            [r["lon"] for r in records],
+            [r["lat"] for r in records],
+        ),
+        crs="EPSG:4326",
+    ).to_crs(CRS_UTM)
+
+    t_utm = territorios.to_crs(CRS_UTM)[["id_ubs", "geometry"]]
+    joined = gpd.sjoin(osc_gdf, t_utm, how="left", predicate="within")
+    counts = joined.groupby("id_ubs").size()
+
+    all_ids = territorios["id_ubs"].values
+    result = counts.reindex(all_ids).fillna(0)
+    log.info("  D3 — %d entidades OSM distribuídas em %d territórios", len(records), (result > 0).sum())
+    return result
+
+
 def calcular_indicadores(agg: pd.DataFrame) -> pd.DataFrame:
     """
     Calcula indicadores percentuais a partir dos totais agregados.
@@ -241,6 +274,11 @@ def calcular_indicadores(agg: pd.DataFrame) -> pd.DataFrame:
     # D2 — Sem coleta de lixo (não coletado + não em caçamba)
     sem_lixo = col("V00001") - col("V00397") - col("V00398")
     ind["D2_sem_lixo"] = sem_lixo / col("V00001").replace(0, np.nan) * 100
+
+    # D4 — Adolescentes femininas 10-19 anos (proxy mães adolescentes, SINASC sem CEP)
+    ind["D4_adol_fem"] = (
+        (col("V01022") + col("V01023")) / col("V01006").replace(0, np.nan) * 100
+    )
 
     # D5 — Crianças < 1 ano: proxy = (0-4 anos) / 5 / total pop
     ind["D5_menor1"] = (col("V01031") / 5) / col("V01006").replace(0, np.nan) * 100
@@ -320,6 +358,12 @@ def main():
     log.info("Calculando indicadores por UBS...")
     ind = calcular_indicadores(agg)
 
+    # D3 — Entidades comunitárias OSM (contagem por território)
+    log.info("Calculando D3 (entidades comunitárias OSM)...")
+    osc_counts = contar_osc_por_territorio(territorios_com_id)
+    pop_ubs = ind["pop_total"].replace(0, np.nan)
+    ind["D3_osc_per1k"] = (osc_counts.reindex(ind.index).fillna(0) / pop_ubs * 1000)
+
     # Adicionar metadados
     meta = territorios.set_index("id_ubs")[["no_ubs"]].copy()
     ind = meta.join(ind, how="right")
@@ -338,7 +382,7 @@ def main():
 
     # 8. Resumo
     print("\n=== RESUMO DOS INDICADORES ===")
-    pct_cols = [c for c in ind.columns if c.startswith(("D1_", "D2_", "D4_", "D5_"))]
+    pct_cols = [c for c in ind.columns if c.startswith(("D1_", "D2_", "D3_", "D4_", "D5_"))]
     if pct_cols:
         print(ind[pct_cols].describe().round(2).to_string())
 

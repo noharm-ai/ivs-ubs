@@ -1,0 +1,260 @@
+[
+  {
+    "lat": -31.6404584,
+    "lon": -52.3331554,
+    "name": "Pacto Pela Vida",
+    "type": "ngo"
+  },
+  {
+    "lat": -31.3684289,
+    "lon": -52.5059815,
+    "name": "Salão Grafitte",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.742067,
+    "lon": -52.3888411,
+    "name": "Centro Comunitário da Cohab Fragata",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7739001,
+    "lon": -52.3470591,
+    "name": "Clube Cultural Fica Ahí Pra Ir Dizendo",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7772695,
+    "lon": -52.3428875,
+    "name": "Conselho Regional de Engenharia e Agronomia",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.7649947,
+    "lon": -52.3366735,
+    "name": "SESC",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7580042,
+    "lon": -52.3340506,
+    "name": "Alcoólicos Anônimos",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.7732042,
+    "lon": -52.3380814,
+    "name": "Associação Beneficiente dos Aposentados e Pensionistas de Pelotas",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.7687321,
+    "lon": -52.3400275,
+    "name": "SEBRAE",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.7765566,
+    "lon": -52.3445452,
+    "name": "Asufpel",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7639209,
+    "lon": -52.3394427,
+    "name": "Afuncspel",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.767931,
+    "lon": -52.3409254,
+    "name": "Associação Comercial de Pelotas",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.7746712,
+    "lon": -52.3476757,
+    "name": "Aprepel",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7714482,
+    "lon": -52.3475493,
+    "name": "Associação de Ex-funcionários da CTMR",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7719479,
+    "lon": -52.3481369,
+    "name": "Associação de Cabos e Soldados",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7694004,
+    "lon": -52.3399003,
+    "name": "Conselho de Arquitetura e Urbanismo",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.75717,
+    "lon": -52.3820273,
+    "name": "Clube de Empresários do Fragata",
+    "type": "social_centre"
+  },
+  {
+    "lat": -31.7539453,
+    "lon": -52.3160255,
+    "name": "Associação Comunitária Zona Sul e Vilas Vizinhas",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7540037,
+    "lon": -52.3162377,
+    "name": "G.E.R. Planalto",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7627756,
+    "lon": -52.3328858,
+    "name": "Associação de Inativos da Brigada Militar de Pelotas",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7590102,
+    "lon": -52.344877,
+    "name": "Estrela F.C.",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7701836,
+    "lon": -52.3311004,
+    "name": "Centro Social Filadélfia",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7597732,
+    "lon": -52.2722308,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7596724,
+    "lon": -52.2722267,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.3716658,
+    "lon": -52.4230675,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.5035009,
+    "lon": -52.5838103,
+    "name": "Salão Avante Grenal",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7602901,
+    "lon": -52.271812,
+    "name": "Centro Português",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7621344,
+    "lon": -52.22995,
+    "name": "Laranjal Praia Clube",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7491423,
+    "lon": -52.3045228,
+    "name": "Dunas Clube",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7439507,
+    "lon": -52.3348352,
+    "name": "Parque Tênis Clube",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7470971,
+    "lon": -52.3315849,
+    "name": "Clube Esportivo Gonzaga",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7642695,
+    "lon": -52.3361644,
+    "name": "Clube Diamantinos",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7657821,
+    "lon": -52.3410156,
+    "name": "Centro Português",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.6960435,
+    "lon": -52.3416205,
+    "name": "Sociedade Esportiva e Recreativa 15 de Julho",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7471138,
+    "lon": -52.2971438,
+    "name": "CTG - Negrinho do Pastoreio",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.5047116,
+    "lon": -52.3866843,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7754522,
+    "lon": -52.336783,
+    "name": "Instituto Sylvia Genuíno",
+    "type": "ngo"
+  },
+  {
+    "lat": -31.6876452,
+    "lon": -52.357138,
+    "name": "Associação dos Moradores do Sitio Floresta",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7595714,
+    "lon": -52.2456234,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7690867,
+    "lon": -52.2366983,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7140338,
+    "lon": -52.3128885,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7712867,
+    "lon": -52.2348303,
+    "name": "",
+    "type": "community_centre"
+  },
+  {
+    "lat": -31.7295332,
+    "lon": -52.3146947,
+    "name": "",
+    "type": "community_centre"
+  }
+]

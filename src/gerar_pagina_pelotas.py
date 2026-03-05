@@ -25,24 +25,30 @@ PROC = BASE / "ivs_pelotas" / "data" / "processed"
 OUT_HTML = BASE / "index.html"
 
 # ---------------------------------------------------------------------------
-# Pesos das dimensões (metodologia SMS-POA adaptada)
-# Usamos apenas indicadores disponíveis do Censo IBGE 2022
-# D1 (50%): D1_analf, D1_negros  — 2/5 indicadores disponíveis
-# D2 (30%): D2_sem_saneam, D2_sem_lixo — 2/5 disponíveis
-# D5 (20%): D5_menor1, D5_adol, D5_mif, D5_idosos — 4/4 disponíveis (todos)
+# Indicadores disponíveis por dimensão
+# D1 (20%): analfabetismo, raça — Censo IBGE 2022
+# D2 (20%): saneamento, lixo — Censo IBGE 2022
+# D3 (20%): entidades comunitárias OSM (INVERSO: mais = menos vulnerável)
+# D4 (20%): adolescentes femininas 10-19 (proxy mães adolescentes, Censo IBGE 2022)
+# D5 (20%): perfil demográfico — Censo IBGE 2022
 # ---------------------------------------------------------------------------
 INDICADORES = {
-    "D1_analf":     ("D1", "Analfabetismo 15+",             "%"),
-    "D1_negros":    ("D1", "Pop. preta+parda",              "%"),
-    "D2_sem_saneam":("D2", "Sem saneamento adequado",        "%"),
-    "D2_sem_lixo":  ("D2", "Sem coleta de lixo",            "%"),
-    "D5_menor1":    ("D5", "Crianças <1 ano (proxy 0-4/5)", "%"),
-    "D5_adol":      ("D5", "Adolescentes 10-19 anos",       "%"),
-    "D5_mif":       ("D5", "Mulheres 10-49 anos",           "%"),
-    "D5_idosos":    ("D5", "Idosos 60+ anos",               "%"),
+    "D1_analf":      ("D1", "Analfabetismo 15+",                  "%"),
+    "D1_negros":     ("D1", "Pop. preta+parda",                   "%"),
+    "D2_sem_saneam": ("D2", "Sem saneamento adequado",             "%"),
+    "D2_sem_lixo":   ("D2", "Sem coleta de lixo",                 "%"),
+    "D3_osc_per1k":  ("D3", "Entidades comunitárias / 1.000 hab", "#"),
+    "D4_adol_fem":   ("D4", "Adolescentes femininas 10-19",       "%"),
+    "D5_menor1":     ("D5", "Crianças <1 ano (proxy 0-4/5)",      "%"),
+    "D5_adol":       ("D5", "Adolescentes 10-19 anos",            "%"),
+    "D5_mif":        ("D5", "Mulheres 10-49 anos",                "%"),
+    "D5_idosos":     ("D5", "Idosos 60+ anos",                    "%"),
 }
 
-DIM_PESOS = {"D1": 0.50, "D2": 0.30, "D5": 0.20}
+# Indicadores onde valor MAIOR = MENOS vulnerável (inverter na normalização)
+INDICADORES_INVERSOS = {"D3_osc_per1k"}
+
+DIM_PESOS = {"D1": 0.20, "D2": 0.20, "D3": 0.20, "D4": 0.20, "D5": 0.20}
 
 # Cores do gradiente de vulnerabilidade (verde → amarelo → laranja → vermelho)
 CORES_IVS = [
@@ -65,13 +71,15 @@ def calcular_dimensoes(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calcula scores por dimensão (D1-D5) e IVS parcial.
     Cada score é a média normalizada [0,1] dos indicadores disponíveis na dimensão.
-    D3 e D4 retornam NaN (dados não disponíveis).
+    Indicadores em INDICADORES_INVERSOS são invertidos (mais = menos vulnerável).
     """
     dim_scores: dict[str, list[pd.Series]] = {}
     for col, (dim, *_) in INDICADORES.items():
         if col not in df.columns:
             continue
         norm = normalizar_mm(df[col].fillna(df[col].median()))
+        if col in INDICADORES_INVERSOS:
+            norm = 1 - norm
         dim_scores.setdefault(dim, []).append(norm)
 
     result = pd.DataFrame(index=df.index)
@@ -244,10 +252,10 @@ footer a{{color:#2980b9;text-decoration:none}}
   <p class="sub">Dados IBGE Censo 2022 · Metodologia Determinantes Sociais da Saúde (Dahlgren &amp; Whitehead, 1991)</p>
   <div class="badges">
     <span class="badge">{n_ubs} UBS</span>
-    <span class="badge">8 Indicadores IBGE</span>
+    <span class="badge">10 Indicadores</span>
     <span class="badge">Territórios Voronoi</span>
-    <span class="badge">Censo 2022</span>
-    <span class="badge">⚠ IVS Parcial — indicadores IBGE</span>
+    <span class="badge">Censo 2022 + OpenStreetMap</span>
+    <span class="badge">⚠ IVS Parcial — 5 dimensões</span>
   </div>
 </div>
 
@@ -294,10 +302,10 @@ footer a{{color:#2980b9;text-decoration:none}}
           <th style="text-align:right">Pop. estimada</th>
           <th title="D1 — Condição Socioeconômica (analfabetismo, raça)">D1 <span style="font-weight:400;opacity:.7;font-size:.85em">Socioecon.</span></th>
           <th title="D2 — Habitação e Saneamento (esgoto, lixo)">D2 <span style="font-weight:400;opacity:.7;font-size:.85em">Habitação</span></th>
-          <th title="D3 — Capital Social (sem dados)">D3 <span style="font-weight:400;opacity:.7;font-size:.85em">Capital Social</span></th>
-          <th title="D4 — Saúde Materno-Infantil (sem dados)">D4 <span style="font-weight:400;opacity:.7;font-size:.85em">Mat.-Infantil</span></th>
+          <th title="D3 — Capital Social (entidades comunitárias OSM por 1.000 hab)">D3 <span style="font-weight:400;opacity:.7;font-size:.85em">Capital Social</span></th>
+          <th title="D4 — Saúde Adolescente (% femininas 10-19 anos, proxy mães adolescentes)">D4 <span style="font-weight:400;opacity:.7;font-size:.85em">Saúde Adol.</span></th>
           <th title="D5 — Perfil Demográfico (faixas etárias)">D5 <span style="font-weight:400;opacity:.7;font-size:.85em">Demográfico</span></th>
-          <th title="IVS Parcial — média ponderada D1+D2+D5">IVS Parcial</th>
+          <th title="IVS Parcial — média ponderada D1+D2+D3+D4+D5 (20% cada)">IVS Parcial</th>
           <th>Classe</th>
         </tr>
       </thead>
@@ -309,14 +317,16 @@ footer a{{color:#2980b9;text-decoration:none}}
 
   <div class="section-title">Metodologia</div>
   <div class="method">
-    <p><strong>IVS Parcial</strong> — calculado com 8 indicadores do Censo IBGE 2022, agrupados em 3 das 5 dimensões do IVSaúde SMS-POA:</p>
+    <p><strong>IVS Parcial</strong> — calculado com 10 indicadores, agrupados em 5 dimensões com peso igual (20% cada):</p>
     <ul>
-      <li><strong>D1 — Condição Socioeconômica (peso 50%):</strong> % analfabetismo 15+, % população preta+parda</li>
-      <li><strong>D2 — Condições de Habitação e Saneamento (peso 30%):</strong> % domicílios sem saneamento adequado (sem rede ou fossa ligada), % sem coleta de lixo</li>
-      <li><strong>D5 — Perfil Demográfico (peso 20%):</strong> % crianças &lt;1 ano (proxy 0-4/5), % adolescentes 10-19, % mulheres 10-49, % idosos 60+</li>
+      <li><strong>D1 — Condição Socioeconômica:</strong> % analfabetismo 15+, % população preta+parda <em>(Censo IBGE 2022)</em></li>
+      <li><strong>D2 — Habitação e Saneamento:</strong> % domicílios sem saneamento adequado, % sem coleta de lixo <em>(Censo IBGE 2022)</em></li>
+      <li><strong>D3 — Capital Social:</strong> entidades comunitárias por 1.000 hab (INVERSO: mais = menos vulnerável) <em>(OpenStreetMap 2025)</em></li>
+      <li><strong>D4 — Saúde do Adolescente:</strong> % femininas 10-19 anos (proxy de risco para maternidade adolescente, SINASC sem geocódigo) <em>(Censo IBGE 2022)</em></li>
+      <li><strong>D5 — Perfil Demográfico:</strong> % crianças &lt;1 ano (proxy 0-4/5), % adolescentes 10-19, % mulheres 10-49, % idosos 60+ <em>(Censo IBGE 2022)</em></li>
     </ul>
-    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro de Pelotas. Territórios definidos por Voronoi a partir dos pontos CNES. Fonte: IBGE Censo Demográfico 2022 — Agregados por Setores Censitários.</p>
-    <p style="margin-top:8px;color:#888;font-size:.85em">Indicadores ausentes desta versão (fontes pendentes): Bolsa Família, óbitos por causas violentas, cobertura ESF, evasão escolar, entidades comunitárias, mães adolescentes (SINASC).</p>
+    <p style="margin-top:12px">Cada indicador é normalizado min-max [0,1] dentro de Pelotas. D3 é invertido (maior densidade de OSC = menor vulnerabilidade). Territórios definidos por diagrama de Voronoi a partir dos pontos CNES. Fonte: IBGE Censo Demográfico 2022 — Agregados por Setores Censitários; OpenStreetMap via Overpass API.</p>
+    <p style="margin-top:8px;color:#888;font-size:.85em">Indicadores ausentes desta versão (fontes pendentes): Bolsa Família, óbitos por causas violentas, cobertura ESF, evasão escolar.</p>
   </div>
 
 </div>
