@@ -2,16 +2,16 @@
 gerar_lista_municipios.py
 =========================
 Gera src/data/municipios_com_ubs.csv com todos os municípios brasileiros
-que possuem UBS cadastrada no CNES (tipoUnidade=1).
+que possuem UBS cadastrada no CNES.
 
-Uso rápido (sem verificar CNES — lista todos os 5570 municípios):
-    python src/gerar_lista_municipios.py
+Fonte primária (local): tbEstabelecimento*.csv da BASE_DE_DADOS_CNES
+  python src/gerar_lista_municipios.py --cnes-dir data/BASE_DE_DADOS_CNES_202601
 
-Uso completo (verifica CNES para cada município, ~30 min):
-    python src/gerar_lista_municipios.py --check-cnes
+Fonte alternativa (API IBGE sem filtro CNES):
+  python src/gerar_lista_municipios.py
 
 Filtrar por UF:
-    python src/gerar_lista_municipios.py --check-cnes --uf RS
+  python src/gerar_lista_municipios.py --cnes-dir data/BASE_DE_DADOS_CNES_202601 --uf RS
 """
 from __future__ import annotations
 
@@ -19,10 +19,10 @@ import argparse
 import csv
 import logging
 import re
-import time
 import unicodedata
 from pathlib import Path
 
+import pandas as pd
 import requests
 
 logging.basicConfig(
@@ -32,9 +32,12 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+ROOT = Path(__file__).resolve().parents[1]
 OUT_CSV = Path(__file__).resolve().parent / "data" / "municipios_com_ubs.csv"
 IBGE_API = "https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome"
-CNES_API = "https://cnes.datasus.gov.br/services/estabelecimentos-lite?municipio={ibge}&tipoUnidade=1"
+
+# TP_UNIDADE: 1 = Posto de Saúde, 2 = Centro de Saúde/Unidade Básica
+UBS_TIPOS = {1, 2}
 
 
 def slugify(text: str) -> str:
@@ -52,49 +55,54 @@ def fetch_municipios_ibge(session: requests.Session) -> list[dict]:
     return data
 
 
-def check_cnes_ubs(session: requests.Session, ibge7: str, retries: int = 3) -> int:
-    """Retorna número de UBS no CNES para o município. -1 em caso de erro."""
-    url = CNES_API.format(ibge=ibge7)
-    for attempt in range(retries):
-        try:
-            r = session.get(url, timeout=20)
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, list):
-                return len(data)
-            if isinstance(data, dict):
-                for k in ("content", "items", "data", "result"):
-                    v = data.get(k)
-                    if isinstance(v, list):
-                        return len(v)
-            return 0
-        except Exception as e:  # noqa: BLE001
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-            else:
-                log.debug("CNES erro para %s: %s", ibge7, e)
-    return -1
+def contagem_ubs_por_municipio(cnes_dir: Path) -> dict[str, int]:
+    """
+    Lê tbEstabelecimento*.csv e retorna {co_municipio_gestor: n_ubs}.
+    Conta apenas TP_UNIDADE 1 (Posto de Saúde) e 2 (Centro de Saúde/UBS).
+    """
+    # Localiza o arquivo tbEstabelecimento na pasta
+    candidates = sorted(cnes_dir.glob("tbEstabelecimento*.csv"), reverse=True)
+    if not candidates:
+        raise FileNotFoundError(f"tbEstabelecimento*.csv não encontrado em {cnes_dir}")
+
+    estab_file = candidates[0]
+    log.info("Lendo %s ...", estab_file.name)
+
+    df = pd.read_csv(
+        estab_file,
+        sep=";",
+        encoding="latin-1",
+        usecols=["TP_UNIDADE", "CO_MUNICIPIO_GESTOR"],
+        dtype={"CO_MUNICIPIO_GESTOR": str},
+        low_memory=False,
+    )
+
+    ubs = df[df["TP_UNIDADE"].isin(UBS_TIPOS)].copy()
+    # CNES usa código de 6 dígitos (sem o dígito verificador do IBGE)
+    ubs["CO_MUNICIPIO_GESTOR"] = ubs["CO_MUNICIPIO_GESTOR"].str.strip().str.zfill(6)
+
+    counts = ubs.groupby("CO_MUNICIPIO_GESTOR").size().to_dict()
+    log.info(
+        "  %d UBS em %d municípios (tipos %s)",
+        ubs.shape[0], len(counts), UBS_TIPOS,
+    )
+    return counts
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Gera lista de municípios com UBS no CNES")
     parser.add_argument(
-        "--check-cnes",
-        action="store_true",
-        help="Verifica CNES para cada município e filtra os sem UBS (~30 min para o Brasil todo)",
+        "--cnes-dir",
+        default=None,
+        help="Pasta com BASE_DE_DADOS_CNES (ex.: data/BASE_DE_DADOS_CNES_202601). "
+             "Se omitido, lista todos os municípios da API IBGE sem filtrar por UBS.",
     )
     parser.add_argument("--uf", default=None, help="Filtrar por UF (ex.: RS)")
     parser.add_argument(
         "--min-ubs",
         type=int,
         default=1,
-        help="Mínimo de UBS para incluir o município (padrão: 1, requer --check-cnes)",
-    )
-    parser.add_argument(
-        "--delay",
-        type=float,
-        default=0.3,
-        help="Delay em segundos entre requisições CNES (padrão: 0.3)",
+        help="Mínimo de UBS para incluir o município (padrão: 1, requer --cnes-dir)",
     )
     parser.add_argument("--out", default=str(OUT_CSV), help="Arquivo CSV de saída")
     args = parser.parse_args()
@@ -102,22 +110,28 @@ def main() -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # --- Contagem de UBS por município (fonte local) ---
+    ubs_counts: dict[str, int] = {}
+    if args.cnes_dir:
+        cnes_dir = Path(args.cnes_dir)
+        if not cnes_dir.is_absolute():
+            cnes_dir = ROOT / cnes_dir
+        ubs_counts = contagem_ubs_por_municipio(cnes_dir)
+
+    # --- Lista de municípios (IBGE API) ---
     session = requests.Session()
     session.headers["User-Agent"] = "ivs-batch/1.0 (pesquisa saude publica)"
-
     municipios_ibge = fetch_municipios_ibge(session)
 
     rows: list[dict] = []
-    total = len(municipios_ibge)
     skipped = 0
 
-    for i, m in enumerate(municipios_ibge, 1):
-        ibge7 = str(m["id"])
+    for m in municipios_ibge:
+        ibge7 = str(m["id"]).zfill(7)
         nome = m["nome"]
         try:
             uf = m["microrregiao"]["mesorregiao"]["UF"]["sigla"]
         except (TypeError, KeyError):
-            # Fernando de Noronha, Brasília e outros sem hierarquia completa
             uf = (m.get("regiao-imediata") or {}).get("regiao-intermediaria", {}).get("UF", {}).get("sigla", "")
             if not uf:
                 continue
@@ -125,17 +139,12 @@ def main() -> None:
         if args.uf and uf.upper() != args.uf.upper():
             continue
 
-        n_ubs: int | str = ""
+        ibge6 = ibge7[:6]
+        n_ubs: int | str = ubs_counts.get(ibge6, 0) if ubs_counts else ""
 
-        if args.check_cnes:
-            n_ubs = check_cnes_ubs(session, ibge7)
-            if n_ubs >= 0 and n_ubs < args.min_ubs:
-                skipped += 1
-                if i % 100 == 0:
-                    log.info("  progresso: %d/%d — %d incluídos, %d sem UBS", i, total, len(rows), skipped)
-                time.sleep(args.delay)
-                continue
-            time.sleep(args.delay)
+        if ubs_counts and isinstance(n_ubs, int) and n_ubs < args.min_ubs:
+            skipped += 1
+            continue
 
         rows.append({
             "ibge7": ibge7,
@@ -146,9 +155,6 @@ def main() -> None:
             "n_ubs": n_ubs,
         })
 
-        if args.check_cnes and i % 100 == 0:
-            log.info("  progresso: %d/%d — %d incluídos, %d sem UBS", i, total, len(rows), skipped)
-
     fieldnames = ["ibge7", "ibge6", "nome", "uf", "slug", "n_ubs"]
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
@@ -156,8 +162,8 @@ def main() -> None:
         w.writerows(rows)
 
     log.info("Salvo: %s (%d municípios)", out_path, len(rows))
-    if args.check_cnes:
-        log.info("  %d municípios sem UBS removidos", skipped)
+    if ubs_counts:
+        log.info("  %d municípios sem UBS suficiente removidos", skipped)
 
 
 if __name__ == "__main__":
