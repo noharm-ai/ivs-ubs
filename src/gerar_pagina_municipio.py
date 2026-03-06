@@ -3,10 +3,13 @@ gerar_pagina_municipio.py
 =======================
 Gera index.html com mapa Leaflet interativo e tabela de indicadores
 para territórios de UBS do município configurado.
+
+Também exporta data/{slug}.json para uso com mapa.html dinâmico.
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import logging
 from pathlib import Path
@@ -67,7 +70,7 @@ def _configure_runtime(base_dir: Path, slug: str, cidade: str, out_html: Path | 
     global PROC, OUT_HTML, IVS_FILE, NOME_CIDADE
     PROC = base_dir.resolve() / "data" / "processed"
     IVS_FILE = PROC / f"ivs_{slug}.csv"
-    OUT_HTML = out_html.resolve() if out_html else Path(__file__).resolve().parents[1] / "index.html"
+    OUT_HTML = out_html.resolve() if out_html else Path(__file__).resolve().parents[1] / "pages" / "index.html"
     NOME_CIDADE = cidade
 
 
@@ -137,6 +140,103 @@ def classe_ivs(v: float) -> str:
     return "Alta"
 
 
+def _enrich_geojson(df: pd.DataFrame, geojson_str: str) -> dict:
+    """Enriquece features do GeoJSON com IVS, cor, nome e indicadores chave."""
+    df = df.copy()
+    df["id_ubs"] = df["id_ubs"].astype(str).str.strip()
+    ivs_map  = df.set_index("id_ubs")["ivs_parcial"].to_dict()
+    cor_map  = df.set_index("id_ubs").apply(lambda r: interpolate_color(r["ivs_parcial"]), axis=1).to_dict()
+    nome_map = df.set_index("id_ubs")["no_ubs"].to_dict()
+    saneam_map = df.set_index("id_ubs")["D2_sem_saneam"].to_dict() if "D2_sem_saneam" in df.columns else {}
+    analf_map  = df.set_index("id_ubs")["D1_analf"].to_dict() if "D1_analf" in df.columns else {}
+
+    geojson = json.loads(geojson_str)
+    for feat in geojson["features"]:
+        cnes = str(feat["properties"].get("cnes", ""))
+        feat["properties"]["ivs"]        = round(ivs_map.get(cnes, 0), 3)
+        feat["properties"]["cor"]        = cor_map.get(cnes, "#999")
+        feat["properties"]["nome"]       = nome_map.get(cnes, cnes)
+        feat["properties"]["sem_saneam"] = round(float(saneam_map.get(cnes, 0) or 0), 1)
+        feat["properties"]["analf"]      = round(float(analf_map.get(cnes, 0) or 0), 1)
+    return geojson
+
+
+def gerar_json(df: pd.DataFrame, geojson_str: str, slug: str, cidade: str,
+               uf: str = "", ibge: str = "", out_json: Path | None = None) -> None:
+    """Exporta data/{slug}.json e atualiza data/municipios.json."""
+    n_ubs    = len(df)
+    ivs_mean = float(df["ivs_parcial"].mean())
+    ivs_max  = float(df["ivs_parcial"].max())
+    ivs_min  = float(df["ivs_parcial"].min())
+    n_baixa  = int((df["ivs_parcial"] < 0.33).sum())
+    n_media  = int(((df["ivs_parcial"] >= 0.33) & (df["ivs_parcial"] < 0.66)).sum())
+    n_alta   = int((df["ivs_parcial"] >= 0.66).sum())
+
+    geojson  = _enrich_geojson(df, geojson_str)
+
+    df2 = df.copy()
+    df2["id_ubs"] = df2["id_ubs"].astype(str).str.strip()
+    ind_cols = [c for c in INDICADORES if c in df2.columns]
+    dim_cols = [d for d in ("D1", "D2", "D3", "D4", "D5") if d in df2.columns]
+
+    tabela = []
+    for _, r in df2.sort_values("ivs_parcial", ascending=False).iterrows():
+        row: dict = {
+            "id_ubs":   str(r["id_ubs"]),
+            "nome_ubs": str(r.get("no_ubs", r["id_ubs"])),
+            "pop_total": int(r["pop_total"]) if pd.notna(r.get("pop_total")) else None,
+            "ivs":    round(float(r["ivs_parcial"]), 3),
+            "classe": classe_ivs(float(r["ivs_parcial"])),
+            "cor":    interpolate_color(float(r["ivs_parcial"])),
+        }
+        for d in dim_cols:
+            v = r.get(d)
+            row[d] = round(float(v), 3) if pd.notna(v) else None
+        for c in ind_cols:
+            v = r.get(c)
+            row[c] = round(float(v), 2) if pd.notna(v) else None
+        tabela.append(row)
+
+    hoje = datetime.date.today().isoformat()
+    payload = {
+        "meta": {
+            "slug": slug, "nome": cidade, "uf": uf, "ibge": ibge,
+            "n_ubs": n_ubs, "n_indicadores": len(ind_cols),
+            "ivs_medio":      round(ivs_mean, 3),
+            "ivs_max":        round(ivs_max, 3),
+            "ivs_min":        round(ivs_min, 3),
+            "mean_sem_saneam": round(float(df["D2_sem_saneam"].mean()), 1) if "D2_sem_saneam" in df.columns else None,
+            "mean_analf":      round(float(df["D1_analf"].mean()), 1)      if "D1_analf"      in df.columns else None,
+            "n_baixa": n_baixa, "n_media": n_media, "n_alta": n_alta,
+            "ano_censo": 2022, "gerado_em": hoje,
+        },
+        "geojson": geojson,
+        "tabela": tabela,
+    }
+
+    if out_json is None:
+        out_json = BASE / "pages" / "data" / f"{slug}.json"
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    log.info("JSON gerado: %s (%.1fKB)", out_json, out_json.stat().st_size / 1024)
+
+    # Atualiza manifesto data/municipios.json
+    manifest_path = out_json.parent / "municipios.json"
+    manifest: list[dict] = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+    entry = {
+        "slug": slug, "nome": cidade, "uf": uf, "ibge": ibge,
+        "n_ubs": n_ubs,
+        "ivs_medio": round(ivs_mean, 3),
+        "n_baixa": n_baixa, "n_media": n_media, "n_alta": n_alta,
+        "gerado_em": hoje,
+    }
+    manifest = [m for m in manifest if m.get("slug") != slug]
+    manifest.append(entry)
+    manifest.sort(key=lambda m: m["nome"])
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info("Manifesto atualizado: %s (%d município(s))", manifest_path, len(manifest))
+
+
 def gerar_html(df: pd.DataFrame, geojson_str: str) -> str:
     n_ubs = len(df)
     ivs_mean = df["ivs_parcial"].mean()
@@ -191,26 +291,7 @@ def gerar_html(df: pd.DataFrame, geojson_str: str) -> str:
           <td style="text-align:center">{cls_badge}</td>
         </tr>"""
 
-    # --- GeoJSON com IVS embutido para o mapa ---
-    df["id_ubs"] = df["id_ubs"].astype(str).str.strip()
-    ivs_map = df.set_index("id_ubs")["ivs_parcial"].to_dict()
-    cor_map = df.set_index("id_ubs").apply(
-        lambda r: interpolate_color(r["ivs_parcial"]), axis=1
-    ).to_dict()
-    nome_map = df.set_index("id_ubs")["no_ubs"].to_dict()
-    saneam_map = df.set_index("id_ubs")["D2_sem_saneam"].to_dict()
-    analf_map  = df.set_index("id_ubs")["D1_analf"].to_dict()
-
-    geojson = json.loads(geojson_str)
-    for feat in geojson["features"]:
-        cnes = str(feat["properties"].get("cnes", ""))
-        feat["properties"]["ivs"] = round(ivs_map.get(cnes, 0), 3) if cnes else 0
-        feat["properties"]["cor"] = cor_map.get(cnes, "#999") if cnes else "#999"
-        feat["properties"]["nome"] = nome_map.get(cnes, cnes) if cnes else cnes
-        feat["properties"]["sem_saneam"] = round(saneam_map.get(cnes, 0), 1) if cnes else 0
-        feat["properties"]["analf"] = round(analf_map.get(cnes, 0), 1) if cnes else 0
-
-    geojson_enriched = json.dumps(geojson)
+    geojson_enriched = json.dumps(_enrich_geojson(df, geojson_str))
 
     html = f"""<!DOCTYPE html>
 <html lang="pt-BR">
@@ -417,12 +498,23 @@ def main():
         default=str(Path(__file__).resolve().parents[1] / "ivs_municipio"),
         help="Diretório base de dados (ex.: ivs_betim)",
     )
-    parser.add_argument("--slug", default=DEFAULT_SLUG, help="Slug do município (ex.: betim)")
+    parser.add_argument("--slug",   default=DEFAULT_SLUG,   help="Slug do município (ex.: betim)")
     parser.add_argument("--cidade", default=DEFAULT_CIDADE, help="Nome da cidade para exibição")
+    parser.add_argument("--uf",     default="",             help="Sigla do estado (ex.: RS)")
+    parser.add_argument("--ibge",   default="",             help="Código IBGE do município (ex.: 4314407)")
     parser.add_argument(
         "--out-html",
-        default=str(Path(__file__).resolve().parents[1] / "index.html"),
-        help="Arquivo HTML de saída",
+        default=str(Path(__file__).resolve().parents[1] / "pages" / "index.html"),
+        help="Arquivo HTML de saída (padrão: pages/index.html)",
+    )
+    parser.add_argument(
+        "--out-json",
+        default=None,
+        help="Arquivo JSON de saída (padrão: pages/data/{slug}.json)",
+    )
+    parser.add_argument(
+        "--no-html", action="store_true",
+        help="Não gera HTML; apenas exporta JSON",
     )
     args = parser.parse_args()
 
@@ -443,11 +535,16 @@ def main():
     dim_df = calcular_dimensoes(df)
     df = df.join(dim_df)
 
-    log.info("Gerando HTML...")
-    html = gerar_html(df, geojson_str)
+    if not args.no_html:
+        log.info("Gerando HTML...")
+        html = gerar_html(df, geojson_str)
+        OUT_HTML.write_text(html, encoding="utf-8")
+        log.info("HTML gerado: %s (%.1fKB)", OUT_HTML, len(html) / 1024)
 
-    OUT_HTML.write_text(html, encoding="utf-8")
-    log.info("index.html gerado: %s (%.1fKB)", OUT_HTML, len(html) / 1024)
+    out_json = Path(args.out_json) if args.out_json else None
+    log.info("Gerando JSON...")
+    gerar_json(df, geojson_str, slug=args.slug, cidade=args.cidade,
+               uf=args.uf, ibge=args.ibge, out_json=out_json)
 
 
 if __name__ == "__main__":
