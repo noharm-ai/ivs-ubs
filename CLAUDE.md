@@ -1,4 +1,4 @@
-# CLAUDE.md — Contexto técnico do projeto IVSaúde Pelotas
+# CLAUDE.md — Contexto técnico do projeto IVSaúde
 
 Arquivo de referência para sessões Claude Code. Contém arquitetura, mapeamento de variáveis,
 inventário de dados, limitações conhecidas e convenções do projeto.
@@ -7,12 +7,11 @@ inventário de dados, limitações conhecidas e convenções do projeto.
 
 ## Visão geral
 
-Projeto que computa o **Índice de Vulnerabilidade em Saúde (IVSaúde)** para os
-**55 territórios de UBS de Pelotas-RS**, usando dados abertos do Censo IBGE 2022
-e outras fontes públicas. Metodologia baseada no IVSaúde da SMS-POA (2019).
+Projeto que computa o **Índice de Vulnerabilidade em Saúde (IVSaúde)** por
+**território de UBS**, usando dados abertos do Censo IBGE 2022 e outras fontes públicas.
+Metodologia baseada no IVSaúde da SMS-POA (2019). Suporta múltiplos municípios via batch.
 
-Branch ativa: `claude/health-vulnerability-index-5MnAc`
-GitHub Pages: `index.html` na raiz → publicado em `noharm-ai.github.io/ivs-ubs`
+GitHub Pages: `docs/` → publicado em `noharm-ai.github.io/ivs-ubs`
 
 ---
 
@@ -21,33 +20,47 @@ GitHub Pages: `index.html` na raiz → publicado em `noharm-ai.github.io/ivs-ubs
 ```
 ivs-ubs/
 ├── src/
-│   ├── calcular_ivs_municipio.py     # pipeline principal: IBGE + OSM → ivs_municipio.csv
-│   ├── gerar_pagina_municipio.py     # gera index.html (Leaflet + tabela D1-D5)
-│   ├── gerar_voronoi.py            # gera territorios_voronoi_ubs.geojson
 │   ├── download_municipio.py       # download automatizado (IBGE, CNES, SIM, etc.)
+│   ├── calcular_ivs_municipio.py   # IBGE + OSM → ivs_<slug>.csv
+│   ├── gerar_pagina_municipio.py   # gera mapa Leaflet + JSON para GitHub Pages
+│   ├── gerar_voronoi.py            # gera territorios_voronoi_ubs.geojson
+│   ├── gerar_lista_municipios.py   # gera src/data/municipios_com_ubs.csv a partir do CNES local
+│   ├── batch_ivs.py                # processa múltiplos municípios (download→IVS→JSON)
 │   ├── download_sinasc.py          # download SINASC via pysus
-│   └── download_sim.py             # download SIM via pysus
+│   ├── download_sim.py             # download SIM via pysus
+│   └── data/
+│       └── municipios_com_ubs.csv  # lista de municípios para o batch (gerada por gerar_lista_municipios.py)
 │
-├── ivs_municipio/
-│   ├── data/
-│   │   ├── raw/
-│   │   │   ├── ibge_universo/      # CSVs do Censo 2022 por setor censitário
-│   │   │   ├── ibge_setores/       # GeoJSON dos setores (setores_municipio.geojson)
-│   │   │   ├── cnes/               # UBS geocodificadas (ubs_municipio.json)
-│   │   │   ├── esf/                # cobertura APS (xlsx municipal)
-│   │   │   ├── pbf/                # PBF agregado municipal (pbf_municipio_202312.csv)
-│   │   │   ├── sim/                # SIM parquet + CSV filtrado Pelotas
-│   │   │   ├── sinasc/             # SINASC parquet + CSV filtrado Pelotas
-│   │   │   ├── sinan/              # SINAN sífilis congênita
-│   │   │   ├── censo_escolar/      # matrículas por escola (Tabela_Matricula_2025.csv)
-│   │   │   └── osc_municipio_osm.json  # 43 entidades OSM (community_centre etc.)
-│   │   └── processed/
-│   │       ├── territorios_voronoi_ubs.geojson  # 55 polígonos Voronoi (EPSG:4674)
-│   │       ├── ivs_municipio.csv                  # indicadores por UBS (55 linhas)
-│   │       └── ibge_por_ubs.csv                 # totais IBGE brutos por UBS
-│   └── ...
+├── data/                           # dados externos (NÃO versionados)
+│   ├── BASE_DE_DADOS_CNES_AAAAMM/  # base completa CNES (download manual)
+│   │   ├── tbEstabelecimento*.csv  # 602k estabelecimentos
+│   │   └── ...
+│   ├── Agregados_por_Setores_Censitarios/  # ZIPs IBGE nacionais (cache compartilhado)
+│   ├── <UF>_setores_CD2022/        # shapefile de setores por UF (cache compartilhado)
+│   ├── _cache/
+│   │   └── censo_escolar/          # ZIP do Censo Escolar (cache compartilhado)
+│   └── <UF>/
+│       ├── _cache/
+│       │   ├── sim/                # parquets SIM por UF
+│       │   ├── sinasc/             # parquets SINASC por UF
+│       │   └── cnes_ubs_<UF>.csv   # UBS filtradas do CNES por UF
+│       └── ivs_<slug>/             # dados por município
+│           └── data/
+│               ├── raw/            # ibge_universo/, ibge_setores/, cnes/, esf/, etc.
+│               └── processed/      # territorios_voronoi_ubs.geojson, ivs_<slug>.csv
 │
-├── index.html          # saída final (GitHub Pages)
+├── docs/                           # GitHub Pages (versionado)
+│   ├── index.html                  # listagem com filtro UF/região e busca
+│   ├── mapa.html                   # mapa por município (?m=UF/slug ou ?m=slug legado)
+│   ├── caso-controle.html
+│   ├── comparacao-ivs-poa.html
+│   ├── favicon.ico
+│   └── data/
+│       ├── municipios.json.gz      # manifesto de municípios (apenas .gz, sem plain .json)
+│       └── <UF>/
+│           └── <slug>.json.gz      # dados IVS + Voronoi por município (gzip)
+│
+├── batch_status.csv                # status de cada município processado pelo batch
 └── README.md
 ```
 
@@ -55,17 +68,58 @@ ivs-ubs/
 
 ## Pipeline de execução
 
+### Município único
 ```bash
 source .venv/bin/activate
+python src/download_municipio.py --municipio-ibge 4314407 --uf RS --cidade Pelotas
+python src/calcular_ivs_municipio.py --base-dir data/RS/ivs_pelotas --slug pelotas
+python src/gerar_pagina_municipio.py --base-dir data/RS/ivs_pelotas --slug pelotas \
+    --cidade Pelotas --uf RS --ibge 4314407 --no-html
+# Saída: docs/data/RS/pelotas.json.gz + manifesto docs/data/municipios.json.gz atualizado
+```
 
-# 1. Gerar territórios Voronoi (se necessário)
-python src/gerar_voronoi.py
+### Batch (múltiplos municípios)
+```bash
+# Pré-requisito: BASE_DE_DADOS_CNES extraída em data/
+python src/gerar_lista_municipios.py --cnes-dir data/BASE_DE_DADOS_CNES_202601
 
-# 2. Calcular indicadores (IBGE + OSM → CSV)
-python src/calcular_ivs_municipio.py
+# Rodar em background com logs em tempo real
+nohup python src/batch_ivs.py --uf RR > batch.log 2>&1 &
+tail -f batch.log
 
-# 3. Gerar página HTML
-python src/gerar_pagina_municipio.py
+# Outros filtros
+python src/batch_ivs.py --limit 10 --force
+```
+
+### Reconstruir manifesto (se municipios.json.gz ficar desatualizado)
+```bash
+python3 - <<'EOF'
+import gzip, json
+from pathlib import Path
+data_dir = Path('docs/data')
+manifest = []
+for gz in sorted(data_dir.glob('**/*.json.gz')):
+    if gz.name == 'municipios.json.gz': continue
+    d = json.loads(gzip.decompress(gz.read_bytes()))
+    meta = d['meta']
+    uf = meta.get('uf','')
+    manifest.append({'slug': meta['slug'], 'nome': meta['nome'], 'uf': uf,
+        'ibge': meta.get('ibge',''), 'n_ubs': meta['n_ubs'],
+        'ivs_medio': meta['ivs_medio'], 'n_baixa': meta.get('n_baixa',0),
+        'n_media': meta.get('n_media',0), 'n_alta': meta.get('n_alta',0),
+        'gerado_em': meta.get('gerado_em',''),
+        'path': f"{uf.upper() if uf else 'BR'}/{meta['slug']}.json"})
+manifest.sort(key=lambda m: m['nome'])
+raw = json.dumps(manifest, ensure_ascii=False, indent=2).encode('utf-8')
+with gzip.open(data_dir / 'municipios.json.gz', 'wb', compresslevel=9) as f: f.write(raw)
+print(f'{len(manifest)} municípios')
+EOF
+```
+
+### Desenvolvimento local (GitHub Pages)
+```bash
+# Usar python -m http.server — NÃO usar VSCode Live Preview (recomprime gz automaticamente)
+cd docs && python -m http.server 8000
 ```
 
 ---
