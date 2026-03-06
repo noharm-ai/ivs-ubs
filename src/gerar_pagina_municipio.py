@@ -70,7 +70,7 @@ def _configure_runtime(base_dir: Path, slug: str, cidade: str, out_html: Path | 
     global PROC, OUT_HTML, IVS_FILE, NOME_CIDADE
     PROC = base_dir.resolve() / "data" / "processed"
     IVS_FILE = PROC / f"ivs_{slug}.csv"
-    OUT_HTML = out_html.resolve() if out_html else Path(__file__).resolve().parents[1] / "index.html"
+    OUT_HTML = out_html.resolve() if out_html else Path(__file__).resolve().parents[1] / "pages" / "index.html"
     NOME_CIDADE = cidade
 
 
@@ -215,7 +215,7 @@ def gerar_json(df: pd.DataFrame, geojson_str: str, slug: str, cidade: str,
     }
 
     if out_json is None:
-        out_json = BASE / "data" / f"{slug}.json"
+        out_json = BASE / "pages" / "data" / f"{slug}.json"
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     log.info("JSON gerado: %s (%.1fKB)", out_json, out_json.stat().st_size / 1024)
@@ -504,13 +504,13 @@ def main():
     parser.add_argument("--ibge",   default="",             help="Código IBGE do município (ex.: 4314407)")
     parser.add_argument(
         "--out-html",
-        default=str(Path(__file__).resolve().parents[1] / "index.html"),
-        help="Arquivo HTML de saída (padrão: index.html na raiz)",
+        default=str(Path(__file__).resolve().parents[1] / "pages" / "index.html"),
+        help="Arquivo HTML de saída (padrão: pages/index.html)",
     )
     parser.add_argument(
         "--out-json",
         default=None,
-        help="Arquivo JSON de saída (padrão: data/{slug}.json na raiz)",
+        help="Arquivo JSON de saída (padrão: pages/data/{slug}.json)",
     )
     parser.add_argument(
         "--no-html", action="store_true",
