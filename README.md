@@ -12,14 +12,27 @@ Referência conceitual: Dahlgren & Whitehead (1991).
 ```
 ivs-ubs/
 ├── src/
-│   ├── download_municipio.py        # download e preparação das fontes
+│   ├── download_municipio.py        # download e preparação das fontes por município
 │   ├── gerar_voronoi.py             # geração de territórios Voronoi
 │   ├── calcular_ivs_municipio.py    # cálculo dos indicadores D1-D5
-│   └── gerar_pagina_municipio.py    # geração de index.html (mapa + tabela)
-├── <base_dir>/
-│   ├── data/raw/                    # dados brutos
-│   └── data/processed/              # dados processados e resultados
-├── index.html                       # página final
+│   ├── gerar_pagina_municipio.py    # geração de mapa + tabela + JSON
+│   ├── gerar_lista_municipios.py    # gera lista de municípios com UBS (batch)
+│   ├── batch_ivs.py                 # processa múltiplos municípios em sequência
+│   └── data/
+│       └── municipios_com_ubs.csv   # lista de municípios para o batch
+├── data/
+│   └── BASE_DE_DADOS_CNES_AAAAMM/  # base completa do CNES (download manual, ver abaixo)
+│       ├── tbEstabelecimento*.csv   # estabelecimentos de saúde (usado pelo batch)
+│       └── ...
+├── ivs_<slug>/                      # dados por município (gerado automaticamente)
+│   ├── data/raw/                    # dados brutos baixados
+│   └── data/processed/              # resultados: Voronoi, IVS, status
+├── docs/                            # GitHub Pages
+│   ├── index.html
+│   ├── mapa.html
+│   └── data/
+│       ├── municipios.json          # manifesto de municípios publicados
+│       └── <slug>.json              # dados IVS por município
 └── README.md
 ```
 
@@ -34,34 +47,92 @@ pip install -r requirements.txt
 
 ---
 
-## Pipeline de execução
+## Pré-requisito: BASE_DE_DADOS_CNES
 
-### 1. Baixar e preparar dados
+O pipeline de batch depende da base completa do CNES para identificar quais
+municípios possuem UBS cadastrada e suas coordenadas.
 
-```bash
-python src/download_municipio.py
+**Download manual:**
+
+1. Acesse [cnes.datasus.gov.br](https://cnes.datasus.gov.br) → **Relatórios → Arquivos de Disseminação**
+2. Baixe o arquivo `BASE_DE_DADOS_CNES_AAAAMM.zip` (competência mais recente)
+3. Extraia na pasta `data/` do projeto:
+
+```
+ivs-ubs/data/BASE_DE_DADOS_CNES_202601/
+    tbEstabelecimento202601.csv   ← principal (602 mil estabelecimentos)
+    tbMunicipio202601.csv
+    ...
 ```
 
-Executar apenas uma etapa:
+O arquivo `tbEstabelecimento*.csv` é a única tabela obrigatória para o batch.
+As demais são usadas opcionalmente pelo `download_municipio.py`.
+
+---
+
+## Pipeline de execução — município único
 
 ```bash
-python src/download_municipio.py --only ibge
+source .venv/bin/activate
+
+# 1. Baixar dados do município
+python src/download_municipio.py --municipio-ibge 4314407 --uf RS --cidade Pelotas
+
+# 2. Calcular indicadores por território de UBS
+python src/calcular_ivs_municipio.py --base-dir ivs_pelotas --slug pelotas
+
+# 3. Gerar JSON para o GitHub Pages
+python src/gerar_pagina_municipio.py --base-dir ivs_pelotas --slug pelotas \
+    --cidade Pelotas --uf RS --ibge 4314407 --no-html
 ```
 
-Opções disponíveis em `--only`:
-`cnes`, `voronoi`, `ibge`, `esf`, `sim`, `sinasc`, `sinan`, `censo_escolar`, `pbf`.
-
-### 2. Calcular indicadores por território
+Executar apenas uma etapa do download:
 
 ```bash
-python src/calcular_ivs_municipio.py
+python src/download_municipio.py --municipio-ibge 4314407 --uf RS --cidade Pelotas --only ibge
 ```
 
-### 3. Gerar página HTML final
+Opções de `--only`: `cnes`, `voronoi`, `ibge`, `esf`, `sim`, `sinasc`, `sinan`, `censo_escolar`, `escolas_geo`, `cnpj_osc`, `geocodificar_ceps`, `pbf`.
+
+---
+
+## Pipeline de execução — batch (múltiplos municípios)
+
+### 1. Gerar lista de municípios com UBS
+
+Requer a BASE_DE_DADOS_CNES na pasta `data/`:
 
 ```bash
-python src/gerar_pagina_municipio.py
+# Brasil completo (~5.567 municípios com UBS)
+python src/gerar_lista_municipios.py --cnes-dir data/BASE_DE_DADOS_CNES_202601
+
+# Filtrar por estado
+python src/gerar_lista_municipios.py --cnes-dir data/BASE_DE_DADOS_CNES_202601 --uf RS
+
+# Mínimo de UBS por município
+python src/gerar_lista_municipios.py --cnes-dir data/BASE_DE_DADOS_CNES_202601 --min-ubs 5
 ```
+
+Resultado salvo em `src/data/municipios_com_ubs.csv`.
+
+### 2. Executar o batch em background
+
+```bash
+# Iniciar em background (retoma automaticamente se interrompido)
+nohup python src/batch_ivs.py > batch.log 2>&1 &
+
+# Acompanhar progresso
+tail -f batch.log
+
+# Filtros úteis
+python src/batch_ivs.py --uf RS
+python src/batch_ivs.py --skip-large   # pula IBGE/Censo Escolar (teste rápido)
+python src/batch_ivs.py --limit 10     # processa apenas 10 municípios
+python src/batch_ivs.py --force        # reprocessa mesmo os já concluídos
+```
+
+O status de cada município é salvo em `batch_status.csv` na raiz do projeto.
+Se o batch for interrompido, basta rodá-lo novamente — ele retoma do ponto onde parou.
 
 ---
 
@@ -136,15 +207,15 @@ Saídas:
 
 ## Fontes de dados
 
-| Dado | Fonte |
-|------|-------|
-| Setores censitários e agregados do universo | IBGE Censo 2022 |
-| Estabelecimentos e localização de UBS | CNES / DataSUS |
-| SIM, SINASC, SINAN | DataSUS |
-| Cobertura APS/ESF | e-Gestor APS |
-| Benefícios de transferência de renda | Portal da Transparência |
-| Matrículas escolares | INEP |
-| Entidades comunitárias | OpenStreetMap (Overpass API) |
+| Dado | Fonte | Acesso |
+|------|-------|--------|
+| Setores censitários e agregados do universo | IBGE Censo 2022 | Download automático |
+| Estabelecimentos e localização de UBS | CNES / DataSUS | Download automático (por município) ou BASE_DE_DADOS_CNES (batch) |
+| SIM, SINASC, SINAN | DataSUS | Download automático via pysus |
+| Cobertura APS/ESF | e-Gestor APS | Download automático |
+| Benefícios de transferência de renda | Portal da Transparência | Download automático (API) |
+| Matrículas escolares | INEP | Download automático |
+| Entidades comunitárias | OpenStreetMap (Overpass API) | Download automático |
 
 ---
 
