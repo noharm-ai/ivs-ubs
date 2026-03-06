@@ -114,7 +114,13 @@ def main() -> None:
     for i, m in enumerate(municipios_ibge, 1):
         ibge7 = str(m["id"])
         nome = m["nome"]
-        uf = m["microrregiao"]["mesorregiao"]["UF"]["sigla"]
+        try:
+            uf = m["microrregiao"]["mesorregiao"]["UF"]["sigla"]
+        except (TypeError, KeyError):
+            # Fernando de Noronha, Brasília e outros sem hierarquia completa
+            uf = (m.get("regiao-imediata") or {}).get("regiao-intermediaria", {}).get("UF", {}).get("sigla", "")
+            if not uf:
+                continue
 
         if args.uf and uf.upper() != args.uf.upper():
             continue
