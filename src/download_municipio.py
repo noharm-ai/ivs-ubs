@@ -373,14 +373,14 @@ def _filter_csv_by_municipio(in_csv: Path, out_csv: Path, municipio: str) -> int
     if not mun_col and not setor_col:
         raise KeyError(f"CSV sem coluna de município ou setor: {in_csv.name}")
 
+    mb = in_csv.stat().st_size / 1_048_576
+    log.info("    lendo %s (%.1f MB)...", in_csv.name, mb)
     parts: list[pd.DataFrame] = []
-    for chunk in pd.read_csv(
-        in_csv,
-        sep=sep,
-        dtype=str,
-        encoding=encoding,
-        low_memory=False,
-        chunksize=200_000,
+    for chunk in tqdm(
+        pd.read_csv(in_csv, sep=sep, dtype=str, encoding=encoding, low_memory=False, chunksize=200_000),
+        desc=f"    {in_csv.name}",
+        unit="chunk",
+        leave=False,
     ):
         if mun_col:
             vals = _clean_digits(chunk[mun_col])
@@ -774,12 +774,14 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
             log.info("  IBGE universo: %d CSV(s) disponíveis", len(csvs))
             counts = []
             missing = []
-            for _, (fname, out_csv, keywords) in expected.items():
+            for i, (key, (fname, out_csv, keywords)) in enumerate(expected.items(), 1):
+                log.info("  [%d/%d] %s", i, len(expected), key)
                 src = _pick_universe_source_csv(csvs, fname, keywords)
                 if not src:
                     missing.append(fname)
                     continue
                 n = _filter_csv_by_municipio(src, out_csv, MUNICIPIO_IBGE)
+                log.info("    -> %d setores filtrados", n)
                 counts.append(n)
             if missing:
                 obs = f"arquivos ausentes: {', '.join(missing)}"

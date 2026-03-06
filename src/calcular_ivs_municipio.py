@@ -12,9 +12,16 @@ import logging
 import warnings
 from pathlib import Path
 
+import time
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:
+    def _tqdm(it, **_):  # type: ignore[override]
+        return it
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -294,6 +301,8 @@ def agregar_por_voronoi(
     proporcionalmente à fração de área que intersecta cada território Voronoi.
     """
     log.info("Spatial join setores → territórios Voronoi (ponderado por área)...")
+    log.info("  %d setores × %d territórios — executando overlay (pode demorar)...",
+             len(setores), len(territorios))
 
     # Projetar para UTM 22S
     s_utm = setores.to_crs(CRS_UTM)
@@ -302,7 +311,9 @@ def agregar_por_voronoi(
     s_utm["_area_setor"] = s_utm.geometry.area
 
     # Interseção
+    t0 = time.monotonic()
     inter = gpd.overlay(s_utm, t_utm, how="intersection")
+    log.info("  overlay concluído em %.1fs — %d fragmentos", time.monotonic() - t0, len(inter))
     inter["_area_inter"] = inter.geometry.area
 
     # Mapa área original do setor
@@ -311,7 +322,7 @@ def agregar_por_voronoi(
     inter["_frac"] = (inter["_area_inter"] / inter["_area_orig"].clip(lower=1e-10)).clip(upper=1.0)
 
     resultado: dict[str, pd.Series] = {}
-    for col in colunas_soma:
+    for col in _tqdm(colunas_soma, desc="  agregando colunas", leave=False, unit="col"):
         if col not in inter.columns:
             log.debug("  coluna %s não encontrada na interseção", col)
             continue
