@@ -1186,10 +1186,11 @@ _CNPJ_OSC_CNAE_PREFIXES = ("9430", "9499", "8800", "8899", "9101", "9420", "9411
 _CNPJ_BASE_URL = "https://dadosabertos.rfb.gov.br/CNPJ/"
 
 
-def _get_rf_municipio_code(cidade: str, cnpj_dir: Path, session: requests.Session) -> str | None:
+def _get_rf_municipio_code(cidade: str, cnpj_cache_dir: Path, session: requests.Session) -> str | None:
     """Retorna o código de 4 dígitos da Receita Federal para o município."""
-    mun_zip = cnpj_dir / "Municipios.zip"
-    mun_csv = cnpj_dir / "Municipios.csv"
+    cnpj_cache_dir.mkdir(parents=True, exist_ok=True)
+    mun_zip = cnpj_cache_dir / "Municipios.zip"
+    mun_csv = cnpj_cache_dir / "Municipios.csv"
     if not mun_csv.exists():
         try:
             _download_with_tqdm(_CNPJ_BASE_URL + "Municipios.zip", mun_zip, session=session, timeout=60)
@@ -1213,13 +1214,72 @@ def _get_rf_municipio_code(cidade: str, cnpj_dir: Path, session: requests.Sessio
         )
         match = df[df["DESCRICAO_NORM"] == cidade_norm]
         if match.empty:
-            # fuzzy: prefixo
             match = df[df["DESCRICAO_NORM"].str.startswith(cidade_norm[:6])]
         if not match.empty:
             return str(match.iloc[0]["CODIGO"]).strip().zfill(4)
     except Exception as e:  # noqa: BLE001
         log.warning("  parse Municipios.csv: %s", e)
     return None
+
+
+def _build_cnpj_uf_cache(cnpj_zip_cache: Path, uf_cache: Path, uf: str) -> None:
+    """
+    Baixa os 10 ZIPs da Receita Federal (cache compartilhado), filtra por UF + CNAE ativo
+    e salva CSV de OSCs da UF em data/{UF}/_cache/cnpj_osc_{UF}.csv.
+    Os ZIPs ficam em data/_cache/cnpj/ para reuso entre UFs.
+    """
+    cnpj_zip_cache.mkdir(parents=True, exist_ok=True)
+    uf_cache.parent.mkdir(parents=True, exist_ok=True)
+    s = _session()
+    all_chunks: list[pd.DataFrame] = []
+    n_parts = 10
+    for i in range(n_parts):
+        zip_name = f"Estabelecimentos{i}.zip"
+        zip_dest = cnpj_zip_cache / zip_name
+        try:
+            _download_with_tqdm(_CNPJ_BASE_URL + zip_name, zip_dest, session=s, timeout=900)
+        except Exception as e:  # noqa: BLE001
+            log.warning("  %s: download falhou (%s) — parte ignorada", zip_name, e)
+            continue
+        try:
+            extracted = cnpj_zip_cache / f"_tmp_estab{i}.csv"
+            with zipfile.ZipFile(zip_dest, "r") as zf:
+                csv_members = [n for n in zf.namelist() if n.upper().endswith(".CSV")]
+                if not csv_members:
+                    continue
+                with zf.open(csv_members[0]) as src, open(extracted, "wb") as dst:
+                    dst.write(src.read())
+
+            chunks: list[pd.DataFrame] = []
+            for chunk in tqdm(
+                pd.read_csv(extracted, sep=";", encoding="latin1", dtype=str, header=None,
+                            names=_CNPJ_COLS, chunksize=200_000, low_memory=False),
+                desc=f"  parte {i+1}/{n_parts}",
+                unit="chunk",
+                leave=False,
+            ):
+                filt = chunk[chunk["UF"].astype(str).str.upper() == uf.upper()]
+                filt = filt[filt["SITUACAO_CADASTRAL"].astype(str).str.strip() == "02"]
+                filt = filt[filt["CNAE_FISCAL_PRINCIPAL"].astype(str).str[:4].isin(_CNPJ_OSC_CNAE_PREFIXES)]
+                if not filt.empty:
+                    chunks.append(filt[["CNPJ_BASICO", "CNPJ_ORDEM", "CNPJ_DV",
+                                        "NOME_FANTASIA", "CNAE_FISCAL_PRINCIPAL",
+                                        "CEP", "LOGRADOURO", "NUMERO", "BAIRRO", "UF", "MUNICIPIO"]])
+            extracted.unlink(missing_ok=True)
+            if chunks:
+                all_chunks.append(pd.concat(chunks, ignore_index=True))
+            log.info("  parte %d/%d — %d OSCs acumuladas para %s", i + 1, n_parts,
+                     sum(len(c) for c in all_chunks), uf)
+        except Exception as e:  # noqa: BLE001
+            log.warning("  %s: processamento falhou (%s)", zip_name, e)
+
+    result = pd.concat(all_chunks, ignore_index=True).drop_duplicates(
+        subset=["CNPJ_BASICO", "CNPJ_ORDEM", "CNPJ_DV"]
+    ) if all_chunks else pd.DataFrame(columns=["CNPJ_BASICO", "CNPJ_ORDEM", "CNPJ_DV",
+                                                "NOME_FANTASIA", "CNAE_FISCAL_PRINCIPAL",
+                                                "CEP", "LOGRADOURO", "NUMERO", "BAIRRO", "UF", "MUNICIPIO"])
+    result.to_csv(uf_cache, index=False)
+    log.info("  cache CNPJ UF=%s salvo: %s (%d OSCs)", uf, uf_cache.name, len(result))
 
 
 def step_cnpj_osc(base_dir: Path, skip_large: bool = True) -> StatusRow:
@@ -1238,87 +1298,38 @@ def step_cnpj_osc(base_dir: Path, skip_large: bool = True) -> StatusRow:
 
     if skip_large:
         pd.DataFrame(columns=["CNPJ_BASICO", "CNAE_FISCAL_PRINCIPAL", "CEP", "UF", "MUNICIPIO"]).to_csv(out_csv, index=False)
-        obs = (
-            f"download pulado (--skip-large); para baixar execute com --only cnpj_osc sem --skip-large. "
-            f"Fonte: {_CNPJ_BASE_URL}"
-        )
         log.info("[ETAPA cnpj_osc] pulado (skip_large)")
-        return StatusRow("CNPJ OSC", _rel(base_dir, out_csv), "MANUAL", 0, obs)
+        return StatusRow("CNPJ OSC", _rel(base_dir, out_csv), "MANUAL", 0,
+                         f"download pulado (--skip-large). Fonte: {_CNPJ_BASE_URL}")
 
+    repo_root = Path(__file__).resolve().parents[1]
+    cnpj_zip_cache = repo_root / "data" / "_cache" / "cnpj"
+    uf_cache = repo_root / "data" / UF.upper() / "_cache" / f"cnpj_osc_{UF.upper()}.csv"
+
+    # Nível 1: cache da UF — construído uma vez para todos os municípios da UF
+    if not uf_cache.exists():
+        log.info("  [cnpj_osc] construindo cache UF=%s (ZIPs em %s)...", UF, cnpj_zip_cache)
+        _build_cnpj_uf_cache(cnpj_zip_cache, uf_cache, UF)
+
+    # Nível 2: filtro por município sobre o cache da UF
     s = _session()
-    cnpj_dir = out_csv.parent
-
-    rf_code = _get_rf_municipio_code(CIDADE, cnpj_dir, s)
+    rf_code = _get_rf_municipio_code(CIDADE, cnpj_zip_cache, s)
     if not rf_code:
-        log.warning("[ETAPA cnpj_osc] código RF não encontrado para %s — usando filtro por UF apenas", CIDADE)
+        log.warning("[ETAPA cnpj_osc] código RF não encontrado para %s — usando todos da UF", CIDADE)
 
-    all_chunks: list[pd.DataFrame] = []
-    n_parts = 10
-    for i in range(n_parts):
-        zip_name = f"Estabelecimentos{i}.zip"
-        zip_dest = cnpj_dir / zip_name
-        try:
-            _download_with_tqdm(_CNPJ_BASE_URL + zip_name, zip_dest, session=s, timeout=900)
-        except Exception as e:  # noqa: BLE001
-            log.warning("  %s: download falhou (%s)", zip_name, e)
-            continue
+    try:
+        df_uf = pd.read_csv(uf_cache, dtype=str)
+        if rf_code:
+            result = df_uf[df_uf["MUNICIPIO"].astype(str).str.zfill(4) == rf_code].copy()
+        else:
+            result = df_uf.copy()
+    except Exception as e:  # noqa: BLE001
+        log.warning("  erro ao ler cache UF: %s", e)
+        result = pd.DataFrame(columns=["CNPJ_BASICO", "CNAE_FISCAL_PRINCIPAL", "CEP", "UF", "MUNICIPIO"])
 
-        try:
-            with zipfile.ZipFile(zip_dest, "r") as zf:
-                csv_members = [n for n in zf.namelist() if n.upper().endswith(".CSV")]
-                if not csv_members:
-                    continue
-                member = csv_members[0]
-                extracted = cnpj_dir / Path(member).name
-                with zf.open(member) as src, open(extracted, "wb") as dst:
-                    dst.write(src.read())
-
-            # Lê em chunks para economizar memória
-            chunks: list[pd.DataFrame] = []
-            for chunk in pd.read_csv(
-                extracted,
-                sep=";",
-                encoding="latin1",
-                dtype=str,
-                header=None,
-                names=_CNPJ_COLS,
-                chunksize=200_000,
-                low_memory=False,
-            ):
-                # Filtro: UF correta
-                filt = chunk[chunk["UF"].astype(str).str.upper() == UF.upper()]
-                # Filtro: município RF (se disponível)
-                if rf_code:
-                    filt = filt[filt["MUNICIPIO"].astype(str).str.zfill(4) == rf_code]
-                # Filtro: situação cadastral ativa (02)
-                filt = filt[filt["SITUACAO_CADASTRAL"].astype(str).str.strip() == "02"]
-                # Filtro: CNAE de interesse
-                filt = filt[
-                    filt["CNAE_FISCAL_PRINCIPAL"].astype(str).str[:4].isin(_CNPJ_OSC_CNAE_PREFIXES)
-                ]
-                if not filt.empty:
-                    chunks.append(filt[["CNPJ_BASICO", "CNPJ_ORDEM", "CNPJ_DV",
-                                        "NOME_FANTASIA", "CNAE_FISCAL_PRINCIPAL",
-                                        "CEP", "LOGRADOURO", "NUMERO", "BAIRRO", "UF", "MUNICIPIO"]])
-
-            extracted.unlink(missing_ok=True)
-            zip_dest.unlink(missing_ok=True)
-
-            if chunks:
-                all_chunks.append(pd.concat(chunks, ignore_index=True))
-            log.info("  parte %d/%d concluída (%d registros acumulados)", i + 1, n_parts,
-                     sum(len(c) for c in all_chunks))
-        except Exception as e:  # noqa: BLE001
-            log.warning("  %s: processamento falhou (%s)", zip_name, e)
-
-    if not all_chunks:
-        pd.DataFrame(columns=["CNPJ_BASICO", "CNAE_FISCAL_PRINCIPAL", "CEP", "UF", "MUNICIPIO"]).to_csv(out_csv, index=False)
-        return StatusRow("CNPJ OSC", _rel(base_dir, out_csv), "MANUAL", 0, "nenhum registro encontrado ou download falhou")
-
-    result = pd.concat(all_chunks, ignore_index=True).drop_duplicates(subset=["CNPJ_BASICO", "CNPJ_ORDEM", "CNPJ_DV"])
     result.to_csv(out_csv, index=False)
-    log.info("[ETAPA cnpj_osc] concluída — %d OSCs em %s", len(result), _rel(base_dir, out_csv))
-    return StatusRow("CNPJ OSC", _rel(base_dir, out_csv), "OK", int(len(result)), f"rf_code={rf_code}")
+    log.info("[ETAPA cnpj_osc] concluída — %d OSCs em %s (cache UF=%s)", len(result), _rel(base_dir, out_csv), UF)
+    return StatusRow("CNPJ OSC", _rel(base_dir, out_csv), "OK", int(len(result)), f"rf_code={rf_code}, cache_uf={uf_cache.name}")
 
 
 def step_geocodificar_ceps(base_dir: Path) -> StatusRow:
