@@ -9,6 +9,11 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
          background: #f0f2f5; color: #2c3e50; font-size: 14px; }
+  .site-nav{background:#0f3460;display:flex;gap:4px;padding:8px 16px;flex-wrap:wrap;align-items:center}
+  .site-nav .nav-brand{color:#7fb3d3;font-size:.78em;font-weight:600;margin-right:8px;letter-spacing:.05em;text-transform:uppercase}
+  .site-nav a{color:#b8d4f0;text-decoration:none;padding:5px 12px;border-radius:4px;font-size:.82em;font-weight:500;transition:background .15s;white-space:nowrap}
+  .site-nav a:hover{background:rgba(255,255,255,.15);color:#fff}
+  .site-nav a.active{background:rgba(255,255,255,.22);color:#fff;font-weight:700}
   .header { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
              color: #fff; padding: 32px 40px; }
   .header h1 { font-size: 1.7em; margin-bottom: 6px; }
@@ -69,7 +74,12 @@
 </style>
 </head>
 <body>
-<nav class="site-nav"><span class="nav-brand">IVSaúde</span><a href="index.html">🗺 Pelotas</a><a href="index-poa.html">🗺 Porto Alegre</a><a href="index-betim.html">🗺 Betim</a><a href="comparacao-ivs-poa.html" class="active">📊 Validação POA</a><a href="caso-controle.html">🔬 Caso-Controle</a></nav>
+<nav class="site-nav">
+  <span class="nav-brand">IVSaúde</span>
+  <a href="index.html">🏠 Municípios</a>
+  <a href="comparacao-ivs-poa.html" class="active">📊 Validação POA</a>
+  <a href="caso-controle.html">🔬 Caso-Controle</a>
+</nav>
 
 
 <div class="header">
