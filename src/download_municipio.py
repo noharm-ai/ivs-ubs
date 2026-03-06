@@ -1514,7 +1514,7 @@ def run_pipeline(base_dir: Path, only: str | None = None, skip_large: bool = Fal
         "sinan": lambda: [step_sinan(base_dir)],
         "censo_escolar": lambda: [step_censo_escolar(base_dir, skip_large=skip_large)],
         "escolas_geo": lambda: [step_escolas_geo(base_dir)],
-        "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=True)],
+        "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=skip_large)],
         "geocodificar_ceps": lambda: [step_geocodificar_ceps(base_dir)],
         "pbf": lambda: [step_pbf(base_dir)],
     }
