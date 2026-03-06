@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.ico">
 <title>IVSaúde</title>
 <meta name="description" content="Índice de Vulnerabilidade em Saúde por território de UBS">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
@@ -260,24 +261,40 @@ function renderPage(meta, geojson, tabela) {
 }
 
 async function init() {
-  const slug = new URLSearchParams(location.search).get('m');
-  if (!slug) {
-    location.href = 'index.html';
-    return;
+  // Aceita ?m=RS/pelotas ou legado ?m=pelotas (tenta descobrir via manifesto)
+  const param = new URLSearchParams(location.search).get('m');
+  if (!param) { location.href = 'index.html'; return; }
+
+  // Se inclui barra, é o caminho completo UF/slug
+  let jsonPath = param.includes('/') ? param : null;
+
+  if (!jsonPath) {
+    // Legado: busca no manifesto pelo slug
+    try {
+      const r = await fetch('data/municipios.json.gz');
+      if (r.ok) {
+        const ds = new DecompressionStream('gzip');
+        const manifest = await new Response(r.body.pipeThrough(ds)).json();
+        const entry = manifest.find(m => m.slug === param);
+        jsonPath = entry ? entry.path.replace(/\.json$/, '') : null;
+      }
+    } catch (_) {}
+    if (!jsonPath) jsonPath = param; // fallback flat
   }
 
   let data;
   try {
-    const resp = await fetch(`data/${slug}.json`);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    data = await resp.json();
+    const r = await fetch(`data/${jsonPath}.json.gz`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const ds = new DecompressionStream('gzip');
+    data = await new Response(r.body.pipeThrough(ds)).json();
   } catch (e) {
     document.getElementById('app').innerHTML =
       `<div style="padding:80px;text-align:center">` +
-      `<p style="color:#c0392b;font-size:1.1em;margin-bottom:16px">Dados de "<strong>${slug}</strong>" não encontrados.</p>` +
-      `<p style="color:#666;font-size:.9em;margin-bottom:24px">Execute o pipeline para gerar <code>data/${slug}.json</code>:</p>` +
+      `<p style="color:#c0392b;font-size:1.1em;margin-bottom:16px">Dados de "<strong>${param}</strong>" não encontrados.</p>` +
+      `<p style="color:#666;font-size:.9em;margin-bottom:24px">Execute o pipeline para gerar o JSON do município:</p>` +
       `<pre style="display:inline-block;background:#f4f4f4;padding:12px 20px;border-radius:6px;font-size:.85em;text-align:left">` +
-      `python src/gerar_pagina_municipio.py --slug ${slug} --cidade Nome --uf UF</pre>` +
+      `python src/gerar_pagina_municipio.py --slug ${param} --cidade Nome --uf UF</pre>` +
       `<p style="margin-top:24px"><a href="index.html" style="color:#2980b9">&#8592; Voltar para municípios</a></p>` +
       `</div>`;
     return;

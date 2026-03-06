@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="favicon.ico">
 <title>IVSaúde — Municípios</title>
 <meta name="description" content="Índice de Vulnerabilidade em Saúde por território de UBS — municípios brasileiros. Dados IBGE Censo 2022.">
 <style>
@@ -45,6 +46,20 @@ body{font-family:'Segoe UI',Arial,sans-serif;background:#f0f3f7;color:#222;line-
 footer{text-align:center;font-size:.8em;color:#aaa;padding:28px 0 20px;border-top:1px solid #e3e8ee;margin-top:12px}
 footer a{color:#2980b9;text-decoration:none}
 @media(max-width:600px){.hero{padding:36px 22px 32px}.hero h1{font-size:1.7em}}
+.filtros{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:24px}
+.busca-wrap{flex:1;min-width:200px;max-width:340px;position:relative}
+.busca-wrap input{width:100%;padding:9px 14px 9px 36px;border:1px solid #d0d8e4;border-radius:8px;font-size:.93em;background:#fff;color:#222;outline:none;transition:border-color .15s}
+.busca-wrap input:focus{border-color:#2980b9}
+.busca-wrap::before{content:'🔍';position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:.9em;pointer-events:none}
+.regioes{display:flex;flex-direction:column;gap:6px;flex:1}
+.regiao-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.regiao-label{font-size:.72em;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.05em;min-width:90px}
+.uf-btn{padding:4px 10px;border:1px solid #c8d6e5;border-radius:5px;background:#fff;color:#1a5276;font-size:.8em;font-weight:600;cursor:pointer;transition:all .12s;white-space:nowrap}
+.uf-btn:hover{background:#ebf5fb;border-color:#2980b9}
+.uf-btn.active{background:#2980b9;border-color:#2980b9;color:#fff}
+.uf-btn.disabled{opacity:.35;cursor:default;pointer-events:none}
+.resultado-info{font-size:.85em;color:#888;margin-bottom:16px}
+.sem-resultado{text-align:center;padding:48px 20px;color:#888;font-size:.95em}
 </style>
 </head>
 <body>
@@ -65,6 +80,13 @@ footer a{color:#2980b9;text-decoration:none}
 <div class="container">
 
   <div class="section-title">Municípios disponíveis</div>
+  <div class="filtros">
+    <div class="busca-wrap">
+      <input id="busca" type="text" placeholder="Buscar município..." autocomplete="off">
+    </div>
+    <div class="regioes" id="regioes-container"></div>
+  </div>
+  <div class="resultado-info" id="resultado-info"></div>
   <div id="muni-container">
     <div style="padding:40px;text-align:center;color:#888">Carregando...</div>
   </div>
@@ -91,6 +113,17 @@ footer a{color:#2980b9;text-decoration:none}
 </footer>
 
 <script>
+const REGIOES = [
+  {label:'Norte',     ufs:['AC','AM','AP','PA','RO','RR','TO']},
+  {label:'Nordeste',  ufs:['AL','BA','CE','MA','PB','PE','PI','RN','SE']},
+  {label:'Centro-Oeste', ufs:['DF','GO','MS','MT']},
+  {label:'Sudeste',   ufs:['ES','MG','RJ','SP']},
+  {label:'Sul',       ufs:['PR','RS','SC']},
+];
+
+let allMunicipios = [];
+let ufSelecionada = null;
+
 function ivsColor(v) {
   const stops = [[0,'#27ae60'],[0.33,'#f1c40f'],[0.66,'#e67e22'],[1,'#c0392b']];
   for (let i = 0; i < stops.length - 1; i++) {
@@ -111,9 +144,9 @@ function ivsColor(v) {
 function renderCard(m) {
   const cor = ivsColor(m.ivs_medio);
   const pct = Math.round(m.ivs_medio * 100);
-  const total = m.n_baixa + m.n_media + m.n_alta;
+  const href = m.path ? `mapa.html?m=${m.path.replace(/\.json$/, '')}` : `mapa.html?m=${m.uf}/${m.slug}`;
   return `
-    <a href="mapa.html?m=${m.slug}" class="muni-card" style="border-left-color:${cor}">
+    <a href="${href}" class="muni-card" style="border-left-color:${cor}">
       <div class="muni-nome">${m.nome}</div>
       <div class="muni-uf">${m.uf ? m.uf + (m.ibge ? ' · IBGE ' + m.ibge : '') : ''}</div>
       <div class="muni-stats">
@@ -126,9 +159,7 @@ function renderCard(m) {
           <div class="muni-stat-lbl">IVS médio</div>
         </div>
       </div>
-      <div class="ivs-bar">
-        <div class="ivs-marker" style="left:${pct}%"></div>
-      </div>
+      <div class="ivs-bar"><div class="ivs-marker" style="left:${pct}%"></div></div>
       <div class="ivs-label">IVS médio: ${m.ivs_medio.toFixed(3)}</div>
       <div class="muni-cls">
         <span style="background:#27ae60">${m.n_baixa} Baixa</span>
@@ -138,34 +169,87 @@ function renderCard(m) {
     </a>`;
 }
 
-function renderEmpty() {
-  return `<div class="empty-state">
-    <h3>Nenhum município disponível ainda</h3>
-    <p style="color:#666;font-size:.9em;margin-top:8px">Execute o pipeline para gerar o JSON de um município:</p>
-    <pre>python src/gerar_pagina_municipio.py \\
-  --base-dir ivs_pelotas \\
-  --slug pelotas \\
-  --cidade Pelotas \\
-  --uf RS \\
-  --ibge 4314407</pre>
-    <p style="color:#999;font-size:.82em;margin-top:12px">O arquivo <code>data/pelotas.json</code> será criado automaticamente.</p>
-  </div>`;
+function renderRegioes(ufsComDados) {
+  const container = document.getElementById('regioes-container');
+  container.innerHTML = REGIOES.map(({label, ufs}) => {
+    const btns = ufs.map(uf => {
+      const tem = ufsComDados.has(uf);
+      const cls = `uf-btn${!tem ? ' disabled' : uf === ufSelecionada ? ' active' : ''}`;
+      return `<button class="${cls}" data-uf="${uf}" ${!tem ? 'disabled' : ''}>${uf}</button>`;
+    }).join('');
+    return `<div class="regiao-row"><span class="regiao-label">${label}</span>${btns}</div>`;
+  }).join('');
+
+  container.querySelectorAll('.uf-btn:not(.disabled)').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ufSelecionada = ufSelecionada === btn.dataset.uf ? null : btn.dataset.uf;
+      document.getElementById('busca').value = '';
+      renderRegioes(ufsComDados);
+      renderMunicipios();
+    });
+  });
+}
+
+function renderMunicipios() {
+  const container = document.getElementById('muni-container');
+  const info = document.getElementById('resultado-info');
+  const busca = document.getElementById('busca').value.trim().toLowerCase();
+
+  let lista = allMunicipios;
+
+  if (busca.length >= 2) {
+    lista = lista.filter(m => m.nome.toLowerCase().includes(busca) || (m.uf||'').toLowerCase() === busca);
+  } else if (ufSelecionada) {
+    lista = lista.filter(m => m.uf === ufSelecionada);
+  } else {
+    // Sem filtro: não renderiza tudo de uma vez
+    info.textContent = `${allMunicipios.length} municípios disponíveis — selecione um estado ou busque pelo nome.`;
+    container.innerHTML = '';
+    return;
+  }
+
+  if (lista.length === 0) {
+    info.textContent = '';
+    container.innerHTML = `<div class="sem-resultado">Nenhum município encontrado.</div>`;
+    return;
+  }
+
+  info.textContent = `${lista.length} município${lista.length > 1 ? 's' : ''}`;
+  container.innerHTML = `<div class="muni-grid">${lista.map(renderCard).join('')}</div>`;
+}
+
+async function fetchJson(url) {
+  const r = await fetch(url + '.gz');
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const ds = new DecompressionStream('gzip');
+  return new Response(r.body.pipeThrough(ds)).json();
 }
 
 async function init() {
   const container = document.getElementById('muni-container');
   try {
-    const resp = await fetch('data/municipios.json');
-    if (!resp.ok) throw new Error(resp.status);
-    const municipios = await resp.json();
-    if (municipios.length === 0) {
-      container.innerHTML = renderEmpty();
-    } else {
-      container.innerHTML = `<div class="muni-grid">${municipios.map(renderCard).join('')}</div>`;
-    }
+    allMunicipios = await fetchJson('data/municipios.json');
   } catch (e) {
-    container.innerHTML = renderEmpty();
+    container.innerHTML = `<div class="empty-state"><h3>Nenhum município disponível ainda</h3></div>`;
+    return;
   }
+
+  const ufsComDados = new Set(allMunicipios.map(m => m.uf).filter(Boolean));
+
+  // Seleciona automaticamente se só há uma UF
+  if (ufsComDados.size === 1) ufSelecionada = [...ufsComDados][0];
+
+  renderRegioes(ufsComDados);
+  renderMunicipios();
+
+  document.getElementById('busca').addEventListener('input', () => {
+    const busca = document.getElementById('busca').value.trim();
+    if (busca.length >= 2) {
+      ufSelecionada = null;
+      renderRegioes(ufsComDados);
+    }
+    renderMunicipios();
+  });
 }
 
 init();

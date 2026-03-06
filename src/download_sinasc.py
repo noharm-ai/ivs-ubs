@@ -37,13 +37,17 @@ def download_sinasc_municipio(
     municipio: str = "4314407",
     uf: str = "RS",
     file_prefix: str = "nascidos",
+    parquet_cache_dir: Path | None = None,
 ) -> list[dict]:
     """
     Baixa SINASC por ano e filtra município.
+    parquet_cache_dir: diretório compartilhado para os parquets UF (evita re-download entre municípios).
     Retorna lista de resultados por ano.
     """
     out_dir = base_dir / "data" / "raw" / "sinasc"
     out_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = parquet_cache_dir or out_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
     results: list[dict] = []
 
     # Carrega índice FTP do pysus uma única vez para todos os anos
@@ -74,7 +78,7 @@ def download_sinasc_municipio(
             files = _sinasc_db.get_files("DN", uf=uf, year=year)
             if not files:
                 raise FileNotFoundError(f"SINASC DN {uf} {year} não encontrado no FTP")
-            data = files[0].download(local_dir=str(out_dir))
+            data = files[0].download(local_dir=str(cache_dir))
             df = data.to_dataframe()
             df_filtrado = _filter_by_municipio(df, ("CODMUNNASC", "codmunnasc"), municipio)
             obs = "via pysus"

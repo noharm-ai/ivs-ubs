@@ -5,3 +5,5 @@ data/*
 outputs/
 ivs_pelotas/
 ivs_betim/data/*
+*.log
+batch_status.csv

@@ -125,28 +125,35 @@ def _load_lista(lista_csv: Path, uf: str | None, municipio_ibge: str | None) -> 
 # Execução de subprocesso com log
 # ---------------------------------------------------------------------------
 def _run(cmd: list[str], label: str, timeout: int = 3600) -> tuple[bool, str]:
-    """Executa comando e retorna (sucesso, stderr_resumido)."""
+    """Executa comando com streaming de output em tempo real e retorna (sucesso, erro)."""
     log.info("  [%s] %s", label, " ".join(cmd))
     try:
-        result = subprocess.run(
+        import time as _time
+        proc = subprocess.Popen(
             cmd,
             cwd=str(SRC),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
         )
-        if result.stdout:
-            for line in result.stdout.strip().splitlines()[-10:]:
-                log.info("    %s", line)
-        if result.returncode != 0:
-            err = (result.stderr or result.stdout or "erro sem mensagem")[-500:]
-            log.error("  [%s] FALHOU (código %d): %s", label, result.returncode, err[-200:])
-            return False, err
+        lines: list[str] = []
+        deadline = _time.monotonic() + timeout
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip()
+            lines.append(line)
+            log.info("    %s", line)
+            if _time.monotonic() > deadline:
+                proc.kill()
+                err = f"timeout após {timeout}s"
+                log.error("  [%s] %s", label, err)
+                return False, err
+        proc.wait()
+        if proc.returncode != 0:
+            err = "\n".join(lines[-10:]) or "erro sem mensagem"
+            log.error("  [%s] FALHOU (código %d)", label, proc.returncode)
+            return False, err[-500:]
         return True, ""
-    except subprocess.TimeoutExpired:
-        err = f"timeout após {timeout}s"
-        log.error("  [%s] %s", label, err)
-        return False, err
     except Exception as e:  # noqa: BLE001
         log.error("  [%s] exceção: %s", label, e)
         return False, str(e)
@@ -166,8 +173,8 @@ def processar_municipio(
     Executa as 3 etapas para um município.
     Retorna (sucesso, mensagem_de_erro).
     """
-    base_dir = ROOT / f"ivs_{slug}"
-    out_json = DOCS_DATA / f"{slug}.json"
+    base_dir = ROOT / "data" / uf.upper() / f"ivs_{slug}"
+    out_json = DOCS_DATA / uf.upper() / f"{slug}.json"
 
     # Etapa 1: download
     cmd_download = [

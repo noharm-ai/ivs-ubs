@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import gzip
 import json
 import logging
 from pathlib import Path
@@ -215,16 +216,26 @@ def gerar_json(df: pd.DataFrame, geojson_str: str, slug: str, cidade: str,
     }
 
     if out_json is None:
-        out_json = BASE / "docs" / "data" / f"{slug}.json"
+        out_json = BASE / "docs" / "data" / (uf.upper() if uf else "BR") / f"{slug}.json"
     out_json.parent.mkdir(parents=True, exist_ok=True)
-    out_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    log.info("JSON gerado: %s (%.1fKB)", out_json, out_json.stat().st_size / 1024)
+    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    out_json.write_bytes(raw)
+    gz_path = out_json.with_suffix(".json.gz")
+    with gzip.open(gz_path, "wb", compresslevel=9) as f:
+        f.write(raw)
+    log.info("JSON gerado: %s (%.1fKB → gz %.1fKB)", out_json,
+             len(raw) / 1024, gz_path.stat().st_size / 1024)
 
-    # Atualiza manifesto data/municipios.json
-    manifest_path = out_json.parent / "municipios.json"
-    manifest: list[dict] = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else []
+    # Atualiza manifesto em docs/data/municipios.json (sempre na raiz de data/)
+    docs_data = out_json.parent
+    while docs_data.name != "data" and docs_data.parent != docs_data:
+        docs_data = docs_data.parent
+    gz_path_manifest = docs_data / "municipios.json.gz"
+    manifest: list[dict] = json.loads(gzip.decompress(gz_path_manifest.read_bytes())) if gz_path_manifest.exists() else []
+    uf_dir = uf.upper() if uf else "BR"
     entry = {
         "slug": slug, "nome": cidade, "uf": uf, "ibge": ibge,
+        "path": f"{uf_dir}/{slug}.json",
         "n_ubs": n_ubs,
         "ivs_medio": round(ivs_mean, 3),
         "n_baixa": n_baixa, "n_media": n_media, "n_alta": n_alta,
@@ -233,8 +244,10 @@ def gerar_json(df: pd.DataFrame, geojson_str: str, slug: str, cidade: str,
     manifest = [m for m in manifest if m.get("slug") != slug]
     manifest.append(entry)
     manifest.sort(key=lambda m: m["nome"])
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    log.info("Manifesto atualizado: %s (%d município(s))", manifest_path, len(manifest))
+    manifest_raw = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+    with gzip.open(gz_path_manifest, "wb", compresslevel=9) as f:
+        f.write(manifest_raw)
+    log.info("Manifesto atualizado: %s (%d município(s))", gz_path_manifest, len(manifest))
 
 
 def gerar_html(df: pd.DataFrame, geojson_str: str) -> str:

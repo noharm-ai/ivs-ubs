@@ -267,51 +267,75 @@ def _extract_cnes_from_xml(xml_path: Path) -> list[dict]:
     return rows
 
 
-def _extract_cnes_from_base_csv(base_csv: Path) -> list[dict]:
+def _build_cnes_uf_cache(base_csv: Path, uf_cache: Path) -> None:
     """
-    Extrai UBS do município alvo de um tbEstabelecimento do pacote BASE_DE_DADOS_CNES.
+    Lê o tbEstabelecimento completo uma única vez e salva um CSV por UF
+    com apenas UBS (TP_UNIDADE 1 e 2) — usado como cache para evitar
+    re-leitura do arquivo de 600k linhas a cada município.
     """
     sep, encoding = _detect_csv_sep(base_csv)
-    cols = [
-        "CO_CNES",
-        "NO_FANTASIA",
-        "CO_MUNICIPIO_GESTOR",
-        "TP_UNIDADE",
-        "CO_TIPO_UNIDADE",
-        "NU_LATITUDE",
-        "NU_LONGITUDE",
-    ]
-
-    records: list[dict] = []
-    for chunk in pd.read_csv(
-        base_csv,
-        sep=sep,
-        dtype=str,
-        encoding=encoding,
-        low_memory=False,
-        usecols=lambda c: c in cols,
-        chunksize=200_000,
-    ):
-        mun = chunk.get("CO_MUNICIPIO_GESTOR", pd.Series(dtype=str)).astype(str).str.replace(r"\D", "", regex=True)
+    cols = ["CO_CNES", "NO_FANTASIA", "CO_MUNICIPIO_GESTOR", "TP_UNIDADE",
+            "CO_TIPO_UNIDADE", "NU_LATITUDE", "NU_LONGITUDE"]
+    chunks: list[pd.DataFrame] = []
+    uf_prefix = UF[:2].upper()  # primeiros 2 dígitos do código IBGE da UF
+    # Mapeia UF para prefixo numérico de 2 dígitos do código de município
+    _UF_IBGE_PREFIX = {
+        "RO":"11","AC":"12","AM":"13","RR":"14","PA":"15","AP":"16","TO":"17",
+        "MA":"21","PI":"22","CE":"23","RN":"24","PB":"25","PE":"26","AL":"27",
+        "SE":"28","BA":"29","MG":"31","ES":"32","RJ":"33","SP":"35","PR":"41",
+        "SC":"42","RS":"43","MS":"50","MT":"51","GO":"52","DF":"53",
+    }
+    mun_prefix = _UF_IBGE_PREFIX.get(uf_prefix, "")
+    for chunk in pd.read_csv(base_csv, sep=sep, dtype=str, encoding=encoding,
+                              low_memory=False, usecols=lambda c: c in cols,
+                              chunksize=200_000):
         tp = chunk.get("TP_UNIDADE", pd.Series(dtype=str)).fillna("")
         if "CO_TIPO_UNIDADE" in chunk.columns:
             tp = tp.where(tp.astype(str).str.strip() != "", chunk["CO_TIPO_UNIDADE"])
         tp = tp.astype(str).str.replace(r"\D", "", regex=True).str.zfill(2)
-        mask = (mun.str.startswith(MUNICIPIO_IBGE) | mun.str.startswith(MUNICIPIO_IBGE_6)) & tp.isin({"01", "02"})
+        mun = chunk.get("CO_MUNICIPIO_GESTOR", pd.Series(dtype=str)).astype(str).str.replace(r"\D", "", regex=True)
+        mask = tp.isin({"01", "02"}) & mun.str.startswith(mun_prefix)
         filt = chunk.loc[mask].copy()
-        if filt.empty:
-            continue
-        for _, row in filt.iterrows():
-            records.append(
-                {
-                    "co_cnes": str(row.get("CO_CNES", "")).strip(),
-                    "no_fantasia": str(row.get("NO_FANTASIA", "")).strip(),
-                    "nu_latitude": str(row.get("NU_LATITUDE", "")).strip(),
-                    "nu_longitude": str(row.get("NU_LONGITUDE", "")).strip(),
-                    "co_municipio_gestor": str(row.get("CO_MUNICIPIO_GESTOR", "")).strip(),
-                    "tp_unidade": str(tp.loc[row.name]).strip(),
-                }
-            )
+        if not filt.empty:
+            chunks.append(filt)
+    result = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame(columns=cols)
+    uf_cache.parent.mkdir(parents=True, exist_ok=True)
+    result.to_csv(uf_cache, index=False)
+    log.info("  [CNES cache] %d UBS de %s salvas em %s", len(result), uf_prefix, uf_cache.name)
+
+
+def _extract_cnes_from_base_csv(base_csv: Path) -> list[dict]:
+    """
+    Extrai UBS do município alvo de um tbEstabelecimento do pacote BASE_DE_DADOS_CNES.
+    Usa cache por UF para evitar ler o arquivo completo a cada município.
+    """
+    uf_cache = Path(__file__).resolve().parents[1] / "data" / UF.upper() / "_cache" / f"cnes_ubs_{UF.upper()}.csv"
+    if not uf_cache.exists():
+        _build_cnes_uf_cache(base_csv, uf_cache)
+
+    sep, encoding = _detect_csv_sep(uf_cache)
+    cols = ["CO_CNES", "NO_FANTASIA", "CO_MUNICIPIO_GESTOR", "TP_UNIDADE",
+            "CO_TIPO_UNIDADE", "NU_LATITUDE", "NU_LONGITUDE"]
+    df = pd.read_csv(uf_cache, sep=sep, dtype=str, encoding=encoding,
+                     low_memory=False, usecols=lambda c: c in cols)
+    mun = df.get("CO_MUNICIPIO_GESTOR", pd.Series(dtype=str)).astype(str).str.replace(r"\D", "", regex=True)
+    tp = df.get("TP_UNIDADE", pd.Series(dtype=str)).fillna("")
+    if "CO_TIPO_UNIDADE" in df.columns:
+        tp = tp.where(tp.astype(str).str.strip() != "", df["CO_TIPO_UNIDADE"])
+    tp = tp.astype(str).str.replace(r"\D", "", regex=True).str.zfill(2)
+    mask = (mun.str.startswith(MUNICIPIO_IBGE) | mun.str.startswith(MUNICIPIO_IBGE_6)) & tp.isin({"01", "02"})
+    filt = df.loc[mask].copy()
+
+    records: list[dict] = []
+    for _, row in filt.iterrows():
+        records.append({
+            "co_cnes": str(row.get("CO_CNES", "")).strip(),
+            "no_fantasia": str(row.get("NO_FANTASIA", "")).strip(),
+            "nu_latitude": str(row.get("NU_LATITUDE", "")).strip(),
+            "nu_longitude": str(row.get("NU_LONGITUDE", "")).strip(),
+            "co_municipio_gestor": str(row.get("CO_MUNICIPIO_GESTOR", "")).strip(),
+            "tp_unidade": str(tp.loc[row.name]).strip(),
+        })
     return records
 
 
@@ -589,7 +613,10 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                 source_setores = f"local: {shp_path}"
                 gdf = gpd.read_file(shp_path)
             else:
-                setores_zip = setores_dir / f"{UF}_setores_CD2022.zip"
+                # Salva no diretório compartilhado por UF — baixado uma única vez
+                shared_setores_dir = repo_root / "data" / f"{UF}_setores_CD2022"
+                shared_setores_dir.mkdir(parents=True, exist_ok=True)
+                setores_zip = shared_setores_dir / f"{UF}_setores_CD2022.zip"
                 setores_urls = [
                     "https://geoftp.ibge.gov.br/organizacao_do_territorio/"
                     "malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/"
@@ -599,8 +626,8 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                     f"censo_2022/setores_censitarios_shp/{UF}/SC_Intra_{UF}_2022.zip",
                 ]
                 used_url = _download_first_available(setores_urls, setores_zip)
-                _unzip(setores_zip, setores_dir)
-                shps = sorted(setores_dir.glob("**/*.shp"))
+                _unzip(setores_zip, shared_setores_dir)
+                shps = sorted(shared_setores_dir.glob("**/*.shp"))
                 if not shps:
                     raise FileNotFoundError("shapefile de setores não encontrado após extração")
                 gdf = gpd.read_file(shps[0])
@@ -679,6 +706,10 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
 
             source_universe = "local"
             if not csvs:
+                # Diretório compartilhado para os ZIPs/CSVs BR — baixado uma única vez
+                shared_universo_dir = repo_root / "data" / "Agregados_por_Setores_Censitarios"
+                shared_universo_dir.mkdir(parents=True, exist_ok=True)
+
                 # Nova estrutura IBGE (a partir de 2025): arquivos BR por tema
                 new_base = (
                     "https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022/"
@@ -699,7 +730,10 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                 ]
                 downloaded_any = False
                 for zip_name in new_theme_zips:
-                    zip_dest = universo_dir / zip_name
+                    zip_dest = shared_universo_dir / zip_name
+                    if zip_dest.exists():
+                        downloaded_any = True
+                        continue
                     try:
                         # Também tenta descobrir dinamicamente se o nome mudou
                         candidate_urls: list[str] = [new_base + zip_name]
@@ -709,7 +743,7 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                             if kw and kw in lname:
                                 candidate_urls.insert(0, link)
                         _download_first_available(candidate_urls, zip_dest, timeout=300)
-                        _unzip(zip_dest, universo_dir)
+                        _unzip(zip_dest, shared_universo_dir)
                         downloaded_any = True
                     except Exception as e:  # noqa: BLE001
                         log.warning("  não foi possível baixar %s: %s", zip_name, e)
@@ -717,12 +751,12 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                 if downloaded_any:
                     source_universe = new_base
                 else:
-                    # Fallback: estrutura antiga com zip estadual RS
+                    # Fallback: estrutura antiga com zip estadual
                     old_base = (
                         "https://ftp.ibge.gov.br/Censos/Censo_Demografico_2022/"
                         "Resultados_do_Universo/Agregados_por_Setores_Censitarios/"
                     )
-                    univ_zip = universo_dir / f"{UF}_20231030.zip"
+                    univ_zip = shared_universo_dir / f"{UF}_20231030.zip"
                     if univ_zip.exists() and not zipfile.is_zipfile(univ_zip):
                         log.warning("  ZIP IBGE universo inválido detectado (%s), removendo para novo download", univ_zip.name)
                         univ_zip.unlink()
@@ -733,9 +767,9 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                             fallback_urls.insert(0, link)
                     used_url = _download_first_available(fallback_urls, univ_zip)
                     source_universe = used_url
-                    _unzip(univ_zip, universo_dir)
+                    _unzip(univ_zip, shared_universo_dir)
 
-                csvs = sorted(universo_dir.glob("**/*.csv"))
+                csvs = sorted(shared_universo_dir.glob("**/*.csv"))
 
             log.info("  IBGE universo: %d CSV(s) disponíveis", len(csvs))
             counts = []
@@ -842,6 +876,7 @@ def step_sim(base_dir: Path) -> StatusRow:
         municipio=MUNICIPIO_IBGE,
         uf=UF,
         file_prefix=f"obitos_{SLUG}",
+        parquet_cache_dir=Path(__file__).resolve().parents[1] / "data" / UF.upper() / "_cache" / "sim",
     )
     ok = [r for r in res if r["status"] == "OK"]
     n_total = int(sum(r["n_registros"] for r in ok))
@@ -865,6 +900,7 @@ def step_sinasc(base_dir: Path) -> StatusRow:
         municipio=MUNICIPIO_IBGE,
         uf=UF,
         file_prefix=f"nascidos_{SLUG}",
+        parquet_cache_dir=Path(__file__).resolve().parents[1] / "data" / UF.upper() / "_cache" / "sinasc",
     )
     ok = [r for r in res if r["status"] == "OK"]
     n_total = int(sum(r["n_registros"] for r in ok))
@@ -994,7 +1030,10 @@ def step_censo_escolar(base_dir: Path, skip_large: bool = False) -> StatusRow:
         return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "MANUAL", 0, "arquivo mais recente não localizado")
 
     url, year = resolved
-    zip_path = out_csv.parent / f"microdados_censo_escolar_{year}.zip"
+    # Cache compartilhado para o ZIP nacional do Censo Escolar (baixado uma única vez)
+    censo_cache_dir = Path(__file__).resolve().parents[1] / "data" / "_cache" / "censo_escolar"
+    censo_cache_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = censo_cache_dir / f"microdados_censo_escolar_{year}.zip"
     try:
         _download_with_tqdm(url, zip_path, session=s, timeout=600)
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -1473,7 +1512,7 @@ def run_pipeline(base_dir: Path, only: str | None = None, skip_large: bool = Fal
         "sinan": lambda: [step_sinan(base_dir)],
         "censo_escolar": lambda: [step_censo_escolar(base_dir, skip_large=skip_large)],
         "escolas_geo": lambda: [step_escolas_geo(base_dir)],
-        "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=skip_large)],
+        "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=True)],
         "geocodificar_ceps": lambda: [step_geocodificar_ceps(base_dir)],
         "pbf": lambda: [step_pbf(base_dir)],
     }
@@ -1518,7 +1557,7 @@ def main() -> None:
     base_dir = (
         Path(args.base_dir).resolve()
         if args.base_dir
-        else (Path(__file__).resolve().parents[1] / f"ivs_{SLUG}").resolve()
+        else (Path(__file__).resolve().parents[1] / "data" / UF.upper() / f"ivs_{SLUG}").resolve()
     )
     log.info(
         "Configuração ativa: cidade=%s, ibge=%s, uf=%s, slug=%s, base_dir=%s",
