@@ -219,12 +219,10 @@ def gerar_json(df: pd.DataFrame, geojson_str: str, slug: str, cidade: str,
         out_json = BASE / "docs" / "data" / (uf.upper() if uf else "BR") / f"{slug}.json"
     out_json.parent.mkdir(parents=True, exist_ok=True)
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    out_json.write_bytes(raw)
     gz_path = out_json.with_suffix(".json.gz")
     with gzip.open(gz_path, "wb", compresslevel=9) as f:
         f.write(raw)
-    log.info("JSON gerado: %s (%.1fKB → gz %.1fKB)", out_json,
-             len(raw) / 1024, gz_path.stat().st_size / 1024)
+    log.info("JSON.gz gerado: %s (%.1fKB)", gz_path, gz_path.stat().st_size / 1024)
 
     # Atualiza manifesto em docs/data/municipios.json (sempre na raiz de data/)
     docs_data = out_json.parent
