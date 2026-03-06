@@ -1,6 +1,7 @@
 src/__pycache__/
 .venv/
-ivs_*/data/
+ivs_*/
+data/*
 outputs/
 ivs_pelotas/
 ivs_betim/data/*
