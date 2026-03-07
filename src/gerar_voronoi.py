@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 import requests
 from scipy.spatial import Voronoi
-from shapely.geometry import Polygon
-from shapely.ops import unary_union
+from shapely.geometry import LineString, Polygon
+from shapely.ops import split, unary_union
 
 log = logging.getLogger(__name__)
 
@@ -194,9 +194,9 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
     df = df.dropna(subset=["latitude", "longitude"]).copy()
     df = df.drop_duplicates(subset=["cnes"])
 
-    if len(df) < 3:
+    if len(df) < 2:
         raise ValueError(
-            f"Pontos com coordenadas insuficientes para Voronoi: {len(df)} (mínimo 3)."
+            f"Pontos com coordenadas insuficientes para Voronoi: {len(df)} (mínimo 2)."
         )
 
     pontos = gpd.GeoDataFrame(
@@ -218,17 +218,33 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
         limite_union = unary_union(pontos.geometry).convex_hull.buffer(5_000)
 
     coords = np.array([(geom.x, geom.y) for geom in pontos.geometry])
-    vor = Voronoi(coords)
-    regions, vertices = _voronoi_finite_polygons_2d(vor)
 
-    polys = []
-    for region in regions:
+    if len(coords) == 2:
+        # Caso especial: 2 UBS → dividir pelo bisector perpendicular
+        p1, p2 = coords[0], coords[1]
+        midpoint = (p1 + p2) / 2
+        direction = p2 - p1
+        perp = np.array([-direction[1], direction[0]])
+        perp = perp / np.linalg.norm(perp)
+        far = np.ptp(coords) * 100 + 10_000
+        bisector = LineString([midpoint - perp * far, midpoint + perp * far])
         try:
-            poly = Polygon(vertices[region])
-            clipped = poly.intersection(limite_union)
-            polys.append(clipped)
+            halves = split(limite_union, bisector)
+            geoms = list(halves.geoms)
         except Exception:  # noqa: BLE001
-            polys.append(None)
+            geoms = [limite_union, limite_union]
+        polys = [geoms[i] if i < len(geoms) else None for i in range(2)]
+    else:
+        vor = Voronoi(coords)
+        regions, vertices = _voronoi_finite_polygons_2d(vor)
+        polys = []
+        for region in regions:
+            try:
+                poly = Polygon(vertices[region])
+                clipped = poly.intersection(limite_union)
+                polys.append(clipped)
+            except Exception:  # noqa: BLE001
+                polys.append(None)
 
     gdf = gpd.GeoDataFrame(
         {

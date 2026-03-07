@@ -272,7 +272,7 @@ def _build_cnes_uf_cache(base_csv: Path, uf_cache: Path) -> None:
     result = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame(columns=cols)
     uf_cache.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(uf_cache, index=False)
-    log.info("  [CNES cache] %d UBS de %s salvas em %s", len(result), uf_prefix, uf_cache.name)
+    log.info("  [CNES cache] %d UBS de %s salvas em %s", len(result), UF.upper(), uf_cache.name)
 
 
 def _build_ibge_uf_cache(
