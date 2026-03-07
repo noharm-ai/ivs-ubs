@@ -45,7 +45,7 @@ def _voronoi_finite_polygons_2d(vor: Voronoi, radius: float | None = None):
             new_regions.append(vertices)
             continue
 
-        ridges = all_ridges[p1]
+        ridges = all_ridges.get(p1, [])
         new_region = [v for v in vertices if v >= 0]
 
         for p2, v1, v2 in ridges:
@@ -223,9 +223,12 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
 
     polys = []
     for region in regions:
-        poly = Polygon(vertices[region])
-        clipped = poly.intersection(limite_union)
-        polys.append(clipped)
+        try:
+            poly = Polygon(vertices[region])
+            clipped = poly.intersection(limite_union)
+            polys.append(clipped)
+        except Exception:  # noqa: BLE001
+            polys.append(None)
 
     gdf = gpd.GeoDataFrame(
         {

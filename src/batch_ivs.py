@@ -198,9 +198,11 @@ def processar_municipio(
     if skip_large:
         cmd_download.append("--skip-large")
 
+    log.info("  ┌ [1/3] download")
     ok, err = _run(cmd_download, "download", timeout=7200)
     if not ok:
         return False, f"download: {err}"
+    log.info("  └ [1/3] download OK")
 
     # Etapa 2: calcular IVS
     cmd_ivs = [
@@ -208,9 +210,11 @@ def processar_municipio(
         "--base-dir", str(base_dir),
         "--slug", slug,
     ]
+    log.info("  ┌ [2/3] calcular IVS (overlay espacial — pode demorar)")
     ok, err = _run(cmd_ivs, "calcular_ivs", timeout=1800)
     if not ok:
         return False, f"calcular_ivs: {err}"
+    log.info("  └ [2/3] calcular IVS OK")
 
     # Etapa 3: gerar JSON
     DOCS_DATA.mkdir(parents=True, exist_ok=True)
@@ -224,9 +228,11 @@ def processar_municipio(
         "--no-html",
         "--out-json", str(out_json),
     ]
+    log.info("  ┌ [3/3] gerar JSON.gz")
     ok, err = _run(cmd_json, "gerar_json", timeout=600)
     if not ok:
         return False, f"gerar_json: {err}"
+    log.info("  └ [3/3] gerar JSON.gz OK")
 
     return True, ""
 
@@ -259,7 +265,18 @@ def main() -> None:
 
     processados = 0
     erros = 0
+    tempos: list[float] = []
 
+    # Lista efetiva (excluindo já processados para contar corretamente)
+    pendentes = [
+        r for r in lista
+        if args.force or not (statuses.get(r["ibge7"]) and statuses[r["ibge7"]].ok)
+    ]
+    total = min(len(pendentes), args.limit) if args.limit else len(pendentes)
+    log.info("Pendentes para processar: %d", total)
+    log.info("=" * 60)
+
+    idx = 0
     for row in lista:
         if args.limit and processados + erros >= args.limit:
             break
@@ -272,11 +289,22 @@ def main() -> None:
         # Retomar: pular se já OK
         prev = statuses.get(ibge7)
         if prev and prev.ok and not args.force:
-            log.info("SKIP %s (%s) — já processado em %s", nome, ibge7, prev.fim)
             continue
 
+        idx += 1
+        eta_str = ""
+        if tempos:
+            media = sum(tempos) / len(tempos)
+            restantes = total - idx + 1
+            eta_s = media * restantes
+            h, m = divmod(int(eta_s), 3600)
+            m //= 60
+            eta_str = f"  ETA ~{h}h{m:02d}m" if h else f"  ETA ~{m}min"
+
         log.info("")
-        log.info(">>> Iniciando: %s (%s / %s)", nome, ibge7, uf)
+        log.info("─" * 60)
+        log.info("▶ [%d/%d] %s  (%s · %s)%s", idx, total, nome, ibge7, uf, eta_str)
+        log.info("─" * 60)
         t0 = time.time()
 
         st = MunicipioStatus(
@@ -288,8 +316,9 @@ def main() -> None:
 
         ok, err = processar_municipio(ibge7, uf, nome, slug, skip_large=args.skip_large)
 
+        dur = round(time.time() - t0, 1)
         st.fim = _now()
-        st.duracao_s = round(time.time() - t0, 1)
+        st.duracao_s = dur
         st.ok = ok
         st.etapa = "ok" if ok else "erro"
         st.erro = err[:300] if err else ""
@@ -298,10 +327,11 @@ def main() -> None:
 
         if ok:
             processados += 1
-            log.info("<<< OK: %s — %.0fs", nome, st.duracao_s)
+            tempos.append(dur)
+            log.info("✔ [%d/%d] %s — %.0fs", idx, total, nome, dur)
         else:
             erros += 1
-            log.error("<<< ERRO: %s — %s", nome, err[:150])
+            log.error("✘ [%d/%d] %s — %s", idx, total, nome, err[:150])
 
         if args.delay > 0:
             time.sleep(args.delay)

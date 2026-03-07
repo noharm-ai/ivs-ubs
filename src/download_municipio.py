@@ -5,10 +5,11 @@ import json
 import logging
 import os
 import re
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import unicodedata
 import zipfile
 from dataclasses import asdict, dataclass
-from datetime import date
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -19,25 +20,19 @@ import requests
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover
-    class _TqdmNoop:
-        def __init__(self, *args, **kwargs):
-            pass
+    def tqdm(iterable=None, *args, **kwargs):  # type: ignore[override]
+        return iterable
 
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def update(self, n: int) -> None:
-            return None
-
-    def tqdm(*args, **kwargs):  # type: ignore[override]
-        return _TqdmNoop()
-
-from download_sim import download_sim_municipio
-from download_sinasc import download_sinasc_municipio
 from gerar_voronoi import generate_voronoi
+
+# Carrega .env da raiz do projeto (não sobrescreve variáveis já definidas no ambiente)
+_env_file = Path(__file__).resolve().parents[1] / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -92,39 +87,14 @@ def _city_file(prefix: str, ext: str = "csv") -> str:
     return f"{SLUG}_{prefix}.{ext}"
 
 
-def _month_sequence(n: int = 18, include_current: bool = False) -> list[str]:
-    ref = date.today()
-    year = ref.year
-    month = ref.month if include_current else ref.month - 1
-    if month == 0:
-        month = 12
-        year -= 1
-    out = []
-    for _ in range(n):
-        out.append(f"{year}{month:02d}")
-        month -= 1
-        if month == 0:
-            month = 12
-            year -= 1
-    return out
-
 
 def _ensure_structure(base_dir: Path) -> None:
     folders = [
         base_dir / "data" / "raw" / "cnes",
         base_dir / "data" / "raw" / "ibge_setores",
         base_dir / "data" / "raw" / "ibge_universo",
-        base_dir / "data" / "raw" / "sim",
-        base_dir / "data" / "raw" / "sinasc",
-        base_dir / "data" / "raw" / "sinan",
-        base_dir / "data" / "raw" / "esf",
-        base_dir / "data" / "raw" / "censo_escolar",
-        base_dir / "data" / "raw" / "pbf",
         base_dir / "data" / "raw" / "cnpj",
         base_dir / "data" / "processed",
-        base_dir / "outputs" / "maps",
-        base_dir / "outputs" / "tables",
-        base_dir / "src",
     ]
     for d in folders:
         d.mkdir(parents=True, exist_ok=True)
@@ -267,6 +237,15 @@ def _extract_cnes_from_xml(xml_path: Path) -> list[dict]:
     return rows
 
 
+# Mapeia sigla UF → prefixo numérico de 2 dígitos do código IBGE de município
+_UF_IBGE_PREFIX = {
+    "RO":"11","AC":"12","AM":"13","RR":"14","PA":"15","AP":"16","TO":"17",
+    "MA":"21","PI":"22","CE":"23","RN":"24","PB":"25","PE":"26","AL":"27",
+    "SE":"28","BA":"29","MG":"31","ES":"32","RJ":"33","SP":"35","PR":"41",
+    "SC":"42","RS":"43","MS":"50","MT":"51","GO":"52","DF":"53",
+}
+
+
 def _build_cnes_uf_cache(base_csv: Path, uf_cache: Path) -> None:
     """
     Lê o tbEstabelecimento completo uma única vez e salva um CSV por UF
@@ -277,15 +256,7 @@ def _build_cnes_uf_cache(base_csv: Path, uf_cache: Path) -> None:
     cols = ["CO_CNES", "NO_FANTASIA", "CO_MUNICIPIO_GESTOR", "TP_UNIDADE",
             "CO_TIPO_UNIDADE", "NU_LATITUDE", "NU_LONGITUDE"]
     chunks: list[pd.DataFrame] = []
-    uf_prefix = UF[:2].upper()  # primeiros 2 dígitos do código IBGE da UF
-    # Mapeia UF para prefixo numérico de 2 dígitos do código de município
-    _UF_IBGE_PREFIX = {
-        "RO":"11","AC":"12","AM":"13","RR":"14","PA":"15","AP":"16","TO":"17",
-        "MA":"21","PI":"22","CE":"23","RN":"24","PB":"25","PE":"26","AL":"27",
-        "SE":"28","BA":"29","MG":"31","ES":"32","RJ":"33","SP":"35","PR":"41",
-        "SC":"42","RS":"43","MS":"50","MT":"51","GO":"52","DF":"53",
-    }
-    mun_prefix = _UF_IBGE_PREFIX.get(uf_prefix, "")
+    mun_prefix = _UF_IBGE_PREFIX.get(UF.upper(), "")
     for chunk in pd.read_csv(base_csv, sep=sep, dtype=str, encoding=encoding,
                               low_memory=False, usecols=lambda c: c in cols,
                               chunksize=200_000):
@@ -302,6 +273,64 @@ def _build_cnes_uf_cache(base_csv: Path, uf_cache: Path) -> None:
     uf_cache.parent.mkdir(parents=True, exist_ok=True)
     result.to_csv(uf_cache, index=False)
     log.info("  [CNES cache] %d UBS de %s salvas em %s", len(result), uf_prefix, uf_cache.name)
+
+
+def _build_ibge_uf_cache(
+    csvs: list[Path],
+    uf_cache_dir: Path,
+    uf: str,
+    themes: dict,
+) -> None:
+    """
+    Lê cada CSV nacional IBGE uma única vez e salva versão filtrada por UF em
+    data/Agregados_por_Setores_Censitarios/{UF}/Basico_{UF}.csv, etc.
+
+    Chamado automaticamente na primeira execução de qualquer município da UF;
+    os demais municípios reusam esses arquivos menores (~1/27 do tamanho nacional).
+    """
+    uf_cache_dir.mkdir(parents=True, exist_ok=True)
+    mun_prefix = _UF_IBGE_PREFIX.get(uf.upper(), "")
+    if not mun_prefix:
+        log.warning("  [IBGE cache UF] prefixo IBGE não encontrado para UF=%s", uf)
+        return
+
+    for key, (fname, _, keywords) in themes.items():
+        out = uf_cache_dir / fname
+        if out.exists() and out.stat().st_size > 0:
+            continue
+        src = _pick_universe_source_csv(csvs, fname, keywords)
+        if not src:
+            log.warning("  [IBGE cache UF] CSV não encontrado para tema %s", key)
+            continue
+
+        log.info("  [IBGE cache UF=%s] %s ← %s...", uf, fname, src.name)
+        sep, encoding = _detect_csv_sep(src)
+        first = pd.read_csv(src, sep=sep, nrows=1, dtype=str, encoding=encoding, low_memory=False)
+        cols = list(first.columns)
+        mun_col = next((c for c in cols if c.upper() in {"CD_MUN", "CD_MUNICIPIO", "CO_MUNICIPIO", "COD_MUN", "COD_MUNICIPIO"}), None)
+        setor_col = next((c for c in cols if c.upper() in {"CD_SETOR", "CD_SETOR_CENSITARIO", "SETOR"}), None)
+
+        parts: list[pd.DataFrame] = []
+        for chunk in tqdm(
+            pd.read_csv(src, sep=sep, dtype=str, encoding=encoding, low_memory=False,
+                        chunksize=200_000, on_bad_lines="skip"),
+            desc=f"  cache UF={uf} {key}",
+            unit="chunk",
+            leave=False,
+        ):
+            ref_col = mun_col or setor_col
+            if not ref_col:
+                parts.append(chunk)
+                continue
+            vals = _clean_digits(chunk[ref_col])
+            mask = vals.str.startswith(mun_prefix)
+            part = chunk.loc[mask].copy()
+            if not part.empty:
+                parts.append(part)
+
+        result = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=cols)
+        result.to_csv(out, index=False)
+        log.info("  [IBGE cache UF=%s] %s salvo: %d setores", uf, fname, len(result))
 
 
 def _extract_cnes_from_base_csv(base_csv: Path) -> list[dict]:
@@ -377,7 +406,8 @@ def _filter_csv_by_municipio(in_csv: Path, out_csv: Path, municipio: str) -> int
     log.info("    lendo %s (%.1f MB)...", in_csv.name, mb)
     parts: list[pd.DataFrame] = []
     for chunk in tqdm(
-        pd.read_csv(in_csv, sep=sep, dtype=str, encoding=encoding, low_memory=False, chunksize=200_000),
+        pd.read_csv(in_csv, sep=sep, dtype=str, encoding=encoding, low_memory=False,
+                    chunksize=200_000, on_bad_lines="skip"),
         desc=f"    {in_csv.name}",
         unit="chunk",
         leave=False,
@@ -729,17 +759,23 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                     "Agregados_por_setores_caracteristicas_domicilio3_BR.zip",
                 ]
                 downloaded_any = False
+                _ftp_links_cache: list[str] | None = None
                 for zip_name in new_theme_zips:
                     zip_dest = shared_universo_dir / zip_name
                     if zip_dest.exists():
                         downloaded_any = True
                         continue
                     try:
-                        # Também tenta descobrir dinamicamente se o nome mudou
+                        # Descobre dinamicamente links do FTP (cache para não repetir a listagem)
+                        if _ftp_links_cache is None:
+                            try:
+                                _ftp_links_cache = _list_zip_links(new_base)
+                            except Exception:
+                                _ftp_links_cache = []
                         candidate_urls: list[str] = [new_base + zip_name]
-                        for link in (_list_zip_links(new_base) if not downloaded_any else []):
+                        kw = zip_name.split("_")[3] if "_" in zip_name else ""
+                        for link in _ftp_links_cache:
                             lname = Path(urlparse(link).path).name.lower()
-                            kw = zip_name.split("_")[3] if "_" in zip_name else ""
                             if kw and kw in lname:
                                 candidate_urls.insert(0, link)
                         _download_first_available(candidate_urls, zip_dest, timeout=300)
@@ -772,17 +808,52 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
                 csvs = sorted(shared_universo_dir.glob("**/*.csv"))
 
             log.info("  IBGE universo: %d CSV(s) disponíveis", len(csvs))
+
+            # Cache por UF: construído uma vez, reutilizado por todos os municípios da UF.
+            # Os arquivos resultantes têm o mesmo nome que os legados (ex: Basico_RS.csv),
+            # portanto _pick_universe_source_csv os encontra automaticamente por match exato.
+            uf_universo_cache = repo_root / "data" / "Agregados_por_Setores_Censitarios" / UF.upper()
+            missing_in_uf_cache = [
+                key for key, (fname, _, _kw) in expected.items()
+                if not (uf_universo_cache / fname).exists()
+            ]
+            if missing_in_uf_cache:
+                log.info("  [IBGE cache UF=%s] construindo cache (temas ausentes: %s)...", UF, missing_in_uf_cache)
+                _build_ibge_uf_cache(csvs, uf_universo_cache, UF, expected)
+            else:
+                log.info("  [IBGE cache UF=%s] cache completo, pulando construção", UF)
+
+            # Prefixa csvs com os arquivos de UF para que sejam preferidos pelo match exato
+            if uf_universo_cache.exists():
+                uf_files = sorted(uf_universo_cache.glob("*.csv"))
+                uf_fnames = {f.name for f in uf_files}
+                csvs = uf_files + [c for c in csvs if c.name not in uf_fnames]
+
             counts = []
             missing = []
-            for i, (key, (fname, out_csv, keywords)) in enumerate(expected.items(), 1):
-                log.info("  [%d/%d] %s", i, len(expected), key)
+
+            def _filter_theme(key: str, fname: str, out_csv: Path, keywords: list) -> tuple:
                 src = _pick_universe_source_csv(csvs, fname, keywords)
                 if not src:
-                    missing.append(fname)
-                    continue
+                    return key, None, fname
                 n = _filter_csv_by_municipio(src, out_csv, MUNICIPIO_IBGE)
-                log.info("    -> %d setores filtrados", n)
-                counts.append(n)
+                return key, n, None
+
+            n_workers = min(len(expected), os.cpu_count() or 4)
+            log.info("  filtrando %d temas em paralelo (%d workers)...", len(expected), n_workers)
+            with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                futures = {
+                    ex.submit(_filter_theme, key, fname, out_csv, keywords): key
+                    for key, (fname, out_csv, keywords) in expected.items()
+                }
+                for fut in as_completed(futures):
+                    key, n, missing_fname = fut.result()
+                    if missing_fname:
+                        missing.append(missing_fname)
+                        log.info("    %s: não encontrado", key)
+                    else:
+                        log.info("    %s -> %d setores filtrados", key, n)
+                        counts.append(n)
             if missing:
                 obs = f"arquivos ausentes: {', '.join(missing)}"
                 status = "PARCIAL" if counts else "MANUAL"
@@ -819,355 +890,6 @@ def step_ibge(base_dir: Path, skip_large: bool = False) -> list[StatusRow]:
     return rows
 
 
-def step_esf(base_dir: Path) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "esf" / _city_file("cobertura_esf")
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    if out_csv.exists() and out_csv.stat().st_size > 0:
-        n = max(sum(1 for _ in out_csv.open("r", encoding="utf-8")) - 1, 0)
-        if n > 0:
-            log.info("[ETAPA 4] concluída — ESF já existente (%d linhas)", n)
-            return StatusRow("ESF", _rel(base_dir, out_csv), "OK", n, "arquivo existente")
-        log.info("[ETAPA 4] concluída — ESF existente sem linhas (manual)")
-        return StatusRow("ESF", _rel(base_dir, out_csv), "MANUAL", 0, "arquivo existente sem registros")
-
-    s = _session()
-    for comp in _month_sequence(18, include_current=False):
-        url = (
-            "https://egestorab.saude.gov.br/api/public/relatorios/profissionais/cobertura"
-            f"?municipio={MUNICIPIO_IBGE}&periodo={comp}"
-        )
-        try:
-            r = s.get(url, timeout=30)
-            if r.status_code == 404:
-                continue
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, list):
-                df = pd.json_normalize(data)
-            elif isinstance(data, dict):
-                arr = data.get("content") or data.get("items") or data.get("data") or []
-                if isinstance(arr, list):
-                    df = pd.json_normalize(arr)
-                else:
-                    df = pd.DataFrame([data])
-            else:
-                continue
-            if df.empty:
-                continue
-            df["competencia"] = comp
-            df.to_csv(out_csv, index=False)
-            log.info("[ETAPA 4] concluída — %d linhas em %s", len(df), _rel(base_dir, out_csv))
-            return StatusRow("ESF", _rel(base_dir, out_csv), "OK", int(len(df)), "")
-        except Exception:  # noqa: BLE001
-            continue
-
-    pd.DataFrame(columns=["co_cnes", "nu_cnes", "nu_cobertura_esf"]).to_csv(out_csv, index=False)
-    obs = (
-        "download manual necessário em egestorab.saude.gov.br — "
-        f"filtrar {CIDADE} ({MUNICIPIO_IBGE}) e exportar CSV"
-    )
-    log.info("[ETAPA 4] concluída — modo manual")
-    return StatusRow("ESF", _rel(base_dir, out_csv), "MANUAL", 0, obs)
-
-
-def step_sim(base_dir: Path) -> StatusRow:
-    res = download_sim_municipio(
-        base_dir=base_dir,
-        years=(2021, 2022, 2023),
-        municipio=MUNICIPIO_IBGE,
-        uf=UF,
-        file_prefix=f"obitos_{SLUG}",
-        parquet_cache_dir=Path(__file__).resolve().parents[1] / "data" / UF.upper() / "_cache" / "sim",
-    )
-    ok = [r for r in res if r["status"] == "OK"]
-    n_total = int(sum(r["n_registros"] for r in ok))
-    if len(ok) == len(res):
-        status = "OK"
-        obs = "anos 2021-2023"
-    elif ok:
-        status = "PARCIAL"
-        obs = "; ".join(sorted({r["obs"] for r in res if r["status"] != "OK"}))
-    else:
-        status = "MANUAL"
-        obs = "; ".join(sorted({r["obs"] for r in res}))
-    log.info("[ETAPA 5] SIM concluída — total %d registros (2021-2023)", n_total)
-    return StatusRow("SIM", f"raw/sim/obitos_{SLUG}_YYYY.csv", status, n_total, obs)
-
-
-def step_sinasc(base_dir: Path) -> StatusRow:
-    res = download_sinasc_municipio(
-        base_dir=base_dir,
-        years=(2021, 2022, 2023),
-        municipio=MUNICIPIO_IBGE,
-        uf=UF,
-        file_prefix=f"nascidos_{SLUG}",
-        parquet_cache_dir=Path(__file__).resolve().parents[1] / "data" / UF.upper() / "_cache" / "sinasc",
-    )
-    ok = [r for r in res if r["status"] == "OK"]
-    n_total = int(sum(r["n_registros"] for r in ok))
-    if len(ok) == len(res):
-        status = "OK"
-        obs = "anos 2021-2023"
-    elif ok:
-        status = "PARCIAL"
-        obs = "; ".join(sorted({r["obs"] for r in res if r["status"] != "OK"}))
-    else:
-        status = "MANUAL"
-        obs = "; ".join(sorted({r["obs"] for r in res}))
-    log.info("[ETAPA 5] SINASC concluída — total %d registros (2021-2023)", n_total)
-    return StatusRow("SINASC", f"raw/sinasc/nascidos_{SLUG}_YYYY.csv", status, n_total, obs)
-
-
-def step_sinan(base_dir: Path) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "sinan" / _city_file("sifilis")
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    # Pula apenas se arquivo já tem dados
-    if out_csv.exists() and out_csv.stat().st_size > 0:
-        n = max(sum(1 for _ in out_csv.open("r", encoding="utf-8")) - 1, 0)
-        if n > 0:
-            log.info("[ETAPA 6] concluída — SINAN já existente (%d linhas)", n)
-            return StatusRow("SINAN", _rel(base_dir, out_csv), "OK", n, "arquivo existente")
-
-    dfs: list[pd.DataFrame] = []
-    obs_parts: list[str] = []
-    try:
-        from pysus import SINAN as _SINAN  # type: ignore  # nova API pysus ≥1.0
-
-        sinan_db = _SINAN()
-        sinan_db.load()
-        for disease in ("SIFC", "SIFG", "SIFA"):
-            for year in (2022, 2021, 2023):
-                try:
-                    files = sinan_db.get_files(disease, year=year)
-                    if not files:
-                        continue
-                    data = files[0].download(local_dir=str(out_csv.parent))
-                    df_raw = data.to_dataframe()
-                    col = next((c for c in ("ID_MN_RESI", "id_mn_resi", "MUNICIPIO") if c in df_raw.columns), None)
-                    if not col:
-                        continue
-                    vals = df_raw[col].astype(str).str.replace(r"\D", "", regex=True)
-                    filt = df_raw[vals.str.startswith(MUNICIPIO_IBGE) | vals.str.startswith(MUNICIPIO_IBGE_6)].copy()
-                    filt["agravo"] = disease
-                    filt["ano"] = year
-                    if not filt.empty:
-                        dfs.append(filt)
-                        obs_parts.append(f"{disease}/{year}:{len(filt)}")
-                    break  # ano encontrado; passa para próximo agravo
-                except Exception as e:  # noqa: BLE001
-                    log.debug("SINAN %s/%s falhou: %s", disease, year, e)
-    except Exception as e:  # noqa: BLE001
-        log.warning("[ETAPA 6] pysus SINAN falhou: %s", e)
-
-    if dfs:
-        result = pd.concat(dfs, ignore_index=True)
-        result.to_csv(out_csv, index=False)
-        obs = "; ".join(obs_parts)
-        log.info("[ETAPA 6] concluída — %d registros SINAN em %s", len(result), _rel(base_dir, out_csv))
-        return StatusRow("SINAN", _rel(base_dir, out_csv), "OK", int(len(result)), obs)
-
-    pd.DataFrame(columns=["DT_NOTIFIC", "ID_MN_RESI", "CS_SEXO", "NU_CEP"]).to_csv(out_csv, index=False)
-    log.info("[ETAPA 6] concluída — modo manual")
-    return StatusRow("SINAN", _rel(base_dir, out_csv), "MANUAL", 0, "download automático falhou")
-
-
-def _resolve_censo_url(session: requests.Session) -> tuple[str, int] | None:
-    current = date.today().year - 1
-    candidates: list[tuple[str, int]] = []
-    for year in range(current, current - 6, -1):
-        # Nova URL (a partir de ~2024): dados_abertos raiz
-        candidates.append((
-            f"https://download.inep.gov.br/dados_abertos/microdados_censo_escolar_{year}_.zip",
-            year,
-        ))
-        candidates.append((
-            f"https://download.inep.gov.br/dados_abertos/microdados_censo_escolar_{year}.zip",
-            year,
-        ))
-        # URL antiga (subdirectório por ano)
-        candidates.append((
-            "https://download.inep.gov.br/dados_abertos/microdados/"
-            f"censo_escolar/{year}/microdados_educacao_basica_{year}.zip",
-            year,
-        ))
-        candidates.append((
-            "https://download.inep.gov.br/dados_abertos/microdados/"
-            f"censo_escolar/{year}/microdados_censo_escolar_{year}.zip",
-            year,
-        ))
-    for url, year in candidates:
-        try:
-            r = session.head(url, timeout=20, allow_redirects=True)
-            if r.status_code < 400:
-                return url, year
-        except Exception:  # noqa: BLE001
-            continue
-    return None
-
-
-def step_censo_escolar(base_dir: Path, skip_large: bool = False) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "censo_escolar" / _city_file("matriculas")
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    if out_csv.exists() and out_csv.stat().st_size > 0:
-        df = pd.read_csv(out_csv, dtype=str)
-        if df.empty:
-            log.info("[ETAPA 7] concluída — arquivo existente sem matrículas (manual)")
-            return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "MANUAL", 0, "arquivo existente sem registros")
-        anos_col = next((c for c in ("NU_ANO_CENSO", "ANO", "CO_ANO") if c in df.columns), None)
-        anos = sorted(df[anos_col].dropna().astype(str).unique().tolist()) if anos_col else []
-        obs = f"anos={','.join(anos)}" if anos else "arquivo existente"
-        log.info("[ETAPA 7] concluída — %d matrículas em %s", len(df), _rel(base_dir, out_csv))
-        return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "OK", int(len(df)), obs)
-
-    if skip_large:
-        pd.DataFrame(columns=["CO_MUNICIPIO"]).to_csv(out_csv, index=False)
-        return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "MANUAL", 0, "download grande pulado (--skip-large)")
-
-    s = _session()
-    resolved = _resolve_censo_url(s)
-    if not resolved:
-        pd.DataFrame(columns=["CO_MUNICIPIO"]).to_csv(out_csv, index=False)
-        return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "MANUAL", 0, "arquivo mais recente não localizado")
-
-    url, year = resolved
-    # Cache compartilhado para o ZIP nacional do Censo Escolar (baixado uma única vez)
-    censo_cache_dir = Path(__file__).resolve().parents[1] / "data" / "_cache" / "censo_escolar"
-    censo_cache_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = censo_cache_dir / f"microdados_censo_escolar_{year}.zip"
-    try:
-        _download_with_tqdm(url, zip_path, session=s, timeout=600)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            names = zf.namelist()
-            csvs_upper = {n.upper(): n for n in names if n.upper().endswith(".CSV")}
-
-            # Formato novo (≥2025): Tabela_Matricula_{year}.csv + Tabela_Escola_{year}.csv
-            mat_new = next((v for k, v in csvs_upper.items() if "TABELA_MATRICULA" in k), None)
-            esc_new = next((v for k, v in csvs_upper.items() if "TABELA_ESCOLA" in k), None)
-
-            if mat_new and esc_new:
-                with zf.open(esc_new) as f:
-                    escola_df = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False,
-                                            usecols=["CO_ENTIDADE", "CO_MUNICIPIO"])
-                municipio_entidades = set(
-                    escola_df[escola_df["CO_MUNICIPIO"].astype(str).str.replace(r"\D", "", regex=True)
-                               .str.startswith(MUNICIPIO_IBGE_6)]["CO_ENTIDADE"].astype(str)
-                )
-                with zf.open(mat_new) as f:
-                    mat_df = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False, dtype=str)
-                mat_df["CO_MUNICIPIO"] = mat_df["CO_ENTIDADE"].map(
-                    escola_df.set_index("CO_ENTIDADE")["CO_MUNICIPIO"].astype(str)
-                )
-                filt = mat_df[mat_df["CO_ENTIDADE"].isin(municipio_entidades)].copy()
-            else:
-                # Formato antigo: MATRICULA_UF.CSV com CO_MUNICIPIO direto
-                uf_csvs = [v for k, v in csvs_upper.items() if "MATRICULA" in k and UF in k]
-                if not uf_csvs:
-                    uf_csvs = [v for k, v in csvs_upper.items() if "MATRICULA" in k]
-                if not uf_csvs:
-                    raise FileNotFoundError("arquivo matrícula não encontrado no ZIP")
-                member = uf_csvs[0]
-                extracted = out_csv.parent / Path(member).name
-                with zf.open(member) as src, open(extracted, "wb") as dst:
-                    dst.write(src.read())
-                sep, encoding = _detect_csv_sep(extracted)
-                df = pd.read_csv(extracted, sep=sep, dtype=str, encoding=encoding, low_memory=False)
-                if "CO_MUNICIPIO" not in df.columns:
-                    raise KeyError("CO_MUNICIPIO não encontrado em matrículas")
-                vals = df["CO_MUNICIPIO"].astype(str).str.replace(r"\D", "", regex=True)
-                filt = df[vals.str.startswith(MUNICIPIO_IBGE) | vals.str.startswith(MUNICIPIO_IBGE_6)].copy()
-
-        filt.to_csv(out_csv, index=False)
-        anos_col = next((c for c in ("NU_ANO_CENSO", "ANO", "CO_ANO") if c in filt.columns), None)
-        anos = sorted(filt[anos_col].dropna().astype(str).unique().tolist()) if anos_col else []
-        obs = f"ano_fonte={year}; anos_presentes={','.join(anos)}" if anos else f"ano_fonte={year}"
-        log.info("[ETAPA 7] concluída — %d escolas em %s", len(filt), _rel(base_dir, out_csv))
-        return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "OK", int(len(filt)), obs)
-    except Exception as e:  # noqa: BLE001
-        pd.DataFrame(columns=["CO_MUNICIPIO"]).to_csv(out_csv, index=False)
-        return StatusRow("Censo Escolar", _rel(base_dir, out_csv), "MANUAL", 0, f"download/processamento falhou ({e})")
-
-
-def step_escolas_geo(base_dir: Path) -> StatusRow:
-    """Extrai escolas geocodificadas (lat/lon) e matrículas por território a partir do Censo Escolar."""
-    out_csv = base_dir / "data" / "raw" / "censo_escolar" / _city_file("escolas_geo")
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    if out_csv.exists() and out_csv.stat().st_size > 0:
-        df = pd.read_csv(out_csv, dtype=str)
-        if not df.empty:
-            log.info("[ETAPA escolas_geo] arquivo existente (%d escolas)", len(df))
-            return StatusRow("Escolas Geo", _rel(base_dir, out_csv), "OK", int(len(df)), "arquivo existente")
-
-    # Localiza o ZIP do Censo Escolar já baixado
-    ce_dir = base_dir / "data" / "raw" / "censo_escolar"
-    zip_files = sorted(ce_dir.glob("microdados_censo_escolar_*.zip"), reverse=True)
-    if not zip_files:
-        log.info("[ETAPA escolas_geo] ZIP do Censo Escolar não encontrado — execute censo_escolar primeiro")
-        return StatusRow("Escolas Geo", _rel(base_dir, out_csv), "MANUAL", 0, "ZIP não encontrado; execute censo_escolar primeiro")
-
-    zip_path = zip_files[0]
-    escola_cols = [
-        "CO_ENTIDADE", "CO_MUNICIPIO", "LATITUDE", "LONGITUDE",
-        "IN_COMUM_CRECHE", "IN_COMUM_PRE", "IN_COMUM_FUND_AI", "IN_COMUM_FUND_AF",
-        "TP_SITUACAO_FUNCIONAMENTO",
-    ]
-    mat_cols = [
-        "CO_ENTIDADE",
-        "QT_MAT_INF_CRE", "QT_MAT_INF_PRE",
-        "QT_MAT_FUND_AI", "QT_MAT_FUND_AF",
-    ]
-
-    try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            names = zf.namelist()
-            csvs_upper = {n.upper(): n for n in names if n.upper().endswith(".CSV")}
-
-            esc_member = next((v for k, v in csvs_upper.items() if "TABELA_ESCOLA" in k), None)
-            mat_member = next((v for k, v in csvs_upper.items() if "TABELA_MATRICULA" in k), None)
-
-            if not esc_member or not mat_member:
-                return StatusRow("Escolas Geo", _rel(base_dir, out_csv), "MANUAL", 0, "Tabela_Escola ou Tabela_Matricula não encontrada no ZIP")
-
-            with zf.open(esc_member) as f:
-                avail_escola = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False, nrows=0).columns.tolist()
-            use_escola = [c for c in escola_cols if c in avail_escola]
-
-            with zf.open(esc_member) as f:
-                escola_df = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False, usecols=use_escola, dtype=str)
-
-            vals = escola_df["CO_MUNICIPIO"].astype(str).str.replace(r"\D", "", regex=True)
-            escola_df = escola_df[
-                vals.str.startswith(MUNICIPIO_IBGE) | vals.str.startswith(MUNICIPIO_IBGE_6)
-            ].copy()
-
-            # Filtra apenas escolas em atividade (TP_SITUACAO_FUNCIONAMENTO == "1")
-            if "TP_SITUACAO_FUNCIONAMENTO" in escola_df.columns:
-                escola_df = escola_df[escola_df["TP_SITUACAO_FUNCIONAMENTO"].astype(str) == "1"].copy()
-
-            if escola_df.empty:
-                return StatusRow("Escolas Geo", _rel(base_dir, out_csv), "MANUAL", 0, f"nenhuma escola encontrada para {MUNICIPIO_IBGE}")
-
-            with zf.open(mat_member) as f:
-                avail_mat = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False, nrows=0).columns.tolist()
-            use_mat = [c for c in mat_cols if c in avail_mat]
-
-            with zf.open(mat_member) as f:
-                mat_df = pd.read_csv(f, sep=";", encoding="latin1", low_memory=False, usecols=use_mat, dtype=str)
-
-            entidades = set(escola_df["CO_ENTIDADE"].astype(str))
-            mat_df = mat_df[mat_df["CO_ENTIDADE"].astype(str).isin(entidades)].copy()
-
-            merged = escola_df.merge(mat_df, on="CO_ENTIDADE", how="left")
-            merged.to_csv(out_csv, index=False)
-
-            n_com_coords = merged[["LATITUDE", "LONGITUDE"]].replace("", pd.NA).dropna().shape[0] if "LATITUDE" in merged.columns else 0
-            log.info("[ETAPA escolas_geo] concluída — %d escolas (%d com coordenadas)", len(merged), n_com_coords)
-            return StatusRow("Escolas Geo", _rel(base_dir, out_csv), "OK", int(len(merged)), f"com_coords={n_com_coords}")
-    except Exception as e:  # noqa: BLE001
-        log.warning("[ETAPA escolas_geo] falhou: %s", e)
-        return StatusRow("Escolas Geo", _rel(base_dir, out_csv), "MANUAL", 0, f"processamento falhou ({e})")
 
 
 _CNPJ_COLS = [
@@ -1183,7 +905,10 @@ _CNPJ_COLS = [
 # CNAEs de interesse para capital social (D3): associações, assistência social, centros comunitários
 _CNPJ_OSC_CNAE_PREFIXES = ("9430", "9499", "8800", "8899", "9101", "9420", "9411", "9412")
 
-_CNPJ_BASE_URL = "https://dadosabertos.rfb.gov.br/CNPJ/"
+# URL dos arquivos CNPJ da Receita Federal.
+# Fonte/catálogo oficial: https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj
+# Os ZIPs ficam em: https://arquivos.receitafederal.gov.br/CNPJ/
+_CNPJ_BASE_URL = "https://arquivos.receitafederal.gov.br/CNPJ/"
 
 
 def _get_rf_municipio_code(cidade: str, cnpj_cache_dir: Path, session: requests.Session) -> str | None:
@@ -1236,11 +961,14 @@ def _build_cnpj_uf_cache(cnpj_zip_cache: Path, uf_cache: Path, uf: str) -> None:
     for i in range(n_parts):
         zip_name = f"Estabelecimentos{i}.zip"
         zip_dest = cnpj_zip_cache / zip_name
-        try:
-            _download_with_tqdm(_CNPJ_BASE_URL + zip_name, zip_dest, session=s, timeout=900)
-        except Exception as e:  # noqa: BLE001
-            log.warning("  %s: download falhou (%s) — parte ignorada", zip_name, e)
-            continue
+        if zip_dest.exists():
+            log.info("  %s: já existe no cache, pulando download", zip_name)
+        else:
+            try:
+                _download_with_tqdm(_CNPJ_BASE_URL + zip_name, zip_dest, session=s, timeout=900)
+            except Exception as e:  # noqa: BLE001
+                log.warning("  %s: download falhou (%s) — parte ignorada", zip_name, e)
+                continue
         try:
             extracted = cnpj_zip_cache / f"_tmp_estab{i}.csv"
             with zipfile.ZipFile(zip_dest, "r") as zf:
@@ -1332,175 +1060,6 @@ def step_cnpj_osc(base_dir: Path, skip_large: bool = True) -> StatusRow:
     return StatusRow("CNPJ OSC", _rel(base_dir, out_csv), "OK", int(len(result)), f"rf_code={rf_code}, cache_uf={uf_cache.name}")
 
 
-def step_geocodificar_ceps(base_dir: Path) -> StatusRow:
-    """
-    Geocodifica os CEPs únicos do arquivo cnpj_osc.csv via ViaCEP + Nominatim.
-    Salva `{slug}_cnpj_osc_geo.csv` com LATITUDE e LONGITUDE para uso no cálculo IVS.
-    """
-    cnpj_csv = base_dir / "data" / "raw" / "cnpj" / _city_file("cnpj_osc")
-    out_csv = base_dir / "data" / "raw" / "cnpj" / _city_file("cnpj_osc_geo")
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-
-    if out_csv.exists() and out_csv.stat().st_size > 0:
-        df = pd.read_csv(out_csv, dtype=str)
-        n_geo = df[["LATITUDE", "LONGITUDE"]].replace("", pd.NA).dropna().shape[0] if not df.empty else 0
-        if n_geo > 0:
-            log.info("[ETAPA geocodificar_ceps] arquivo existente (%d geocodificados)", n_geo)
-            return StatusRow("CNPJ OSC Geo", _rel(base_dir, out_csv), "OK", n_geo, "arquivo existente")
-
-    if not cnpj_csv.exists() or cnpj_csv.stat().st_size == 0:
-        return StatusRow("CNPJ OSC Geo", _rel(base_dir, out_csv), "MANUAL", 0, "cnpj_osc.csv não encontrado — execute cnpj_osc primeiro")
-
-    df = pd.read_csv(cnpj_csv, dtype=str)
-    if df.empty or "CEP" not in df.columns:
-        return StatusRow("CNPJ OSC Geo", _rel(base_dir, out_csv), "MANUAL", 0, "cnpj_osc.csv sem dados ou sem coluna CEP")
-
-    ceps_unicos = df["CEP"].astype(str).str.replace(r"\D", "", regex=True).str.zfill(8).dropna().unique().tolist()
-    ceps_unicos = [c for c in ceps_unicos if len(c) == 8 and c != "00000000"]
-    log.info("[ETAPA geocodificar_ceps] %d CEPs únicos para geocodificar (Nominatim, 1 req/s)", len(ceps_unicos))
-
-    import time
-
-    s = _session()
-    nominatim_url = "https://nominatim.openstreetmap.org/search"
-    cep_cache: dict[str, tuple[float, float] | None] = {}
-
-    for cep in ceps_unicos:
-        if cep in cep_cache:
-            continue
-        # 1. ViaCEP para obter endereço
-        try:
-            r = s.get(f"https://viacep.com.br/ws/{cep}/json/", timeout=10)
-            if r.status_code == 200:
-                vdata = r.json()
-                if not vdata.get("erro"):
-                    logradouro = vdata.get("logradouro", "")
-                    bairro = vdata.get("bairro", "")
-                    localidade = vdata.get("localidade", "")
-                    uf = vdata.get("uf", "")
-                    query = f"{logradouro}, {bairro}, {localidade}, {uf}, Brasil"
-                    time.sleep(1.0)
-                    nr = s.get(nominatim_url, params={
-                        "q": query, "format": "json", "limit": "1",
-                        "addressdetails": "0",
-                    }, headers={"Accept-Language": "pt-BR"}, timeout=15)
-                    if nr.status_code == 200:
-                        results = nr.json()
-                        if results:
-                            cep_cache[cep] = (float(results[0]["lat"]), float(results[0]["lon"]))
-                            continue
-        except Exception:  # noqa: BLE001
-            pass
-        # 2. Fallback: pesquisar só o CEP
-        try:
-            time.sleep(1.0)
-            nr = s.get(nominatim_url, params={
-                "postalcode": cep, "country": "Brazil", "format": "json", "limit": "1",
-            }, headers={"Accept-Language": "pt-BR"}, timeout=15)
-            if nr.status_code == 200:
-                results = nr.json()
-                if results:
-                    cep_cache[cep] = (float(results[0]["lat"]), float(results[0]["lon"]))
-                    continue
-        except Exception:  # noqa: BLE001
-            pass
-        cep_cache[cep] = None
-        time.sleep(1.0)
-
-    df["_cep_norm"] = df["CEP"].astype(str).str.replace(r"\D", "", regex=True).str.zfill(8)
-    df["LATITUDE"] = df["_cep_norm"].map(lambda c: cep_cache.get(c, (None, None))[0] if cep_cache.get(c) else None)
-    df["LONGITUDE"] = df["_cep_norm"].map(lambda c: cep_cache.get(c, (None, None))[1] if cep_cache.get(c) else None)
-    df = df.drop(columns=["_cep_norm"])
-
-    n_geo = df[["LATITUDE", "LONGITUDE"]].dropna().shape[0]
-    df.to_csv(out_csv, index=False)
-    log.info("[ETAPA geocodificar_ceps] concluída — %d/%d geocodificados", n_geo, len(df))
-    status = "OK" if n_geo > 0 else "MANUAL"
-    return StatusRow("CNPJ OSC Geo", _rel(base_dir, out_csv), status, n_geo, f"{n_geo}/{len(df)} geocodificados")
-
-
-def step_pbf(base_dir: Path) -> StatusRow:
-    out_csv = base_dir / "data" / "raw" / "pbf" / _city_file("pbf_202312")
-    out_csv.parent.mkdir(parents=True, exist_ok=True)
-    s = _session()
-
-    api_key = os.environ.get("TRANSPARENCIA_API_KEY", "SEM_CHAVE")
-    headers = {"chave-api-dados": api_key}
-    # Endpoint correto: novo-bolsa-familia-por-municipio (agrega por mês/município)
-    # Coleta múltiplos meses para ter série histórica
-    meses = ["202312", "202401", "202406", "202412"]
-    rows: list[dict] = []
-    api_err = ""
-    for mes in meses:
-        for page in range(1, 200):
-            url = (
-                "https://api.portaldatransparencia.gov.br/api-de-dados/"
-                f"novo-bolsa-familia-por-municipio?mesAno={mes}&codigoIbge={MUNICIPIO_IBGE}&pagina={page}"
-            )
-            try:
-                r = s.get(url, timeout=30, headers=headers)
-                if r.status_code == 401:
-                    api_err = "API retornou 401 (chave necessária)"
-                    break
-                r.raise_for_status()
-                data = r.json()
-                if not data:
-                    break
-                rows.extend(data if isinstance(data, list) else [data])
-            except Exception as e:  # noqa: BLE001
-                api_err = str(e)
-                break
-    if rows:
-        df = pd.json_normalize(rows)
-        df.to_csv(out_csv, index=False)
-        n_benef = int(df["quantidadeBeneficiados"].sum()) if "quantidadeBeneficiados" in df.columns else len(df)
-        log.info("[ETAPA 8] concluída — %d registros (%d beneficiários) em %s", len(df), n_benef, _rel(base_dir, out_csv))
-        return StatusRow("PBF", _rel(base_dir, out_csv), "OK", n_benef, f"via API; {len(df)} meses")
-
-    fallback_url = "https://portaldatransparencia.gov.br/download-de-dados/bolsa-familia-pagamentos/202312"
-    tmp_file = out_csv.parent / "bolsa_familia_202312_download"
-    try:
-        _download_with_tqdm(fallback_url, tmp_file, session=s, timeout=180)
-        # O portal pode devolver HTML ou ZIP. Se não for parseável, cai para manual.
-        if zipfile.is_zipfile(tmp_file):
-            with zipfile.ZipFile(tmp_file, "r") as zf:
-                csv_members = [n for n in zf.namelist() if n.lower().endswith(".csv")]
-                if not csv_members:
-                    raise FileNotFoundError("ZIP sem CSV")
-                member = csv_members[0]
-                extracted = out_csv.parent / Path(member).name
-                with zf.open(member) as src, open(extracted, "wb") as dst:
-                    dst.write(src.read())
-            sep, enc = _detect_csv_sep(extracted)
-            df = pd.read_csv(extracted, sep=sep, dtype=str, encoding=enc, low_memory=False)
-        else:
-            sep, enc = _detect_csv_sep(tmp_file)
-            df = pd.read_csv(tmp_file, sep=sep, dtype=str, encoding=enc, low_memory=False)
-
-        col_mun = next((c for c in df.columns if "MUNICIP" in c.upper()), None)
-        col_ibge = next((c for c in df.columns if "IBGE" in c.upper()), None)
-        if col_ibge:
-            vals = _clean_digits(df[col_ibge])
-            filt = df[vals.str.startswith(MUNICIPIO_IBGE) | vals.str.startswith(MUNICIPIO_IBGE_6)].copy()
-        elif col_mun:
-            vals = df[col_mun].astype(str).str.upper()
-            filt = df[vals.str.contains(CIDADE.upper(), na=False)].copy()
-        else:
-            raise KeyError("coluna de município/IBGE não encontrada")
-
-        if filt.empty:
-            raise ValueError(f"fallback CSV sem linhas de {CIDADE}")
-        filt.to_csv(out_csv, index=False)
-        log.info("[ETAPA 8] concluída — %d linhas em %s", len(filt), _rel(base_dir, out_csv))
-        return StatusRow("PBF", _rel(base_dir, out_csv), "OK", int(len(filt)), "via CSV mensal")
-    except Exception as e:  # noqa: BLE001
-        pd.DataFrame().to_csv(out_csv, index=False)
-        obs = (
-            "PBF: necessário cadastro em portaldatransparencia.gov.br/api-de-dados "
-            f"para obter chave gratuita; erro atual: {api_err or e}"
-        )
-        log.info("[ETAPA 8] concluída — modo manual")
-        return StatusRow("PBF", _rel(base_dir, out_csv), "MANUAL", 0, obs)
 
 
 def write_status(base_dir: Path, rows: list[StatusRow]) -> Path:
@@ -1519,27 +1078,22 @@ def run_pipeline(base_dir: Path, only: str | None = None, skip_large: bool = Fal
         "cnes": lambda: [step_cnes(base_dir)],
         "voronoi": lambda: [step_voronoi(base_dir)],
         "ibge": lambda: step_ibge(base_dir, skip_large=skip_large),
-        "esf": lambda: [step_esf(base_dir)],
-        "sim": lambda: [step_sim(base_dir)],
-        "sinasc": lambda: [step_sinasc(base_dir)],
-        "sinan": lambda: [step_sinan(base_dir)],
-        "censo_escolar": lambda: [step_censo_escolar(base_dir, skip_large=skip_large)],
-        "escolas_geo": lambda: [step_escolas_geo(base_dir)],
         "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=skip_large)],
-        "geocodificar_ceps": lambda: [step_geocodificar_ceps(base_dir)],
-        "pbf": lambda: [step_pbf(base_dir)],
     }
 
-    run_order = ["cnes", "voronoi", "ibge", "esf", "sim", "sinasc", "sinan", "censo_escolar", "escolas_geo", "cnpj_osc", "geocodificar_ceps", "pbf"]
+    run_order = ["cnes", "voronoi", "ibge", "cnpj_osc"]
     if only:
         run_order = [only]
 
-    for key in run_order:
+    total_steps = len(run_order)
+    for i, key in enumerate(run_order, 1):
+        log.info("  ┌ [%d/%d] %s iniciando...", i, total_steps, key)
         try:
             status_rows.extend(steps[key]())
         except Exception as e:  # noqa: BLE001
             log.exception("Falha inesperada em %s", key)
             status_rows.append(StatusRow(key.upper(), "-", "ERRO", 0, str(e)))
+        log.info("  └ [%d/%d] %s concluído", i, total_steps, key)
 
     status_path = write_status(base_dir, status_rows)
     log.info("[ETAPA 9] concluída — status salvo em %s", _rel(base_dir, status_path))
@@ -1559,7 +1113,7 @@ def main() -> None:
     parser.add_argument("--slug", default=None, help="Slug para nomes de arquivo (ex.: betim)")
     parser.add_argument(
         "--only",
-        choices=["cnes", "voronoi", "ibge", "esf", "sim", "sinasc", "sinan", "censo_escolar", "escolas_geo", "cnpj_osc", "geocodificar_ceps", "pbf"],
+        choices=["cnes", "voronoi", "ibge", "cnpj_osc"],
         default=None,
         help="Executa apenas uma etapa/fonte",
     )
@@ -1586,6 +1140,23 @@ def main() -> None:
     if not df.empty:
         print("\nResumo de disponibilidade:")
         print(df.to_string(index=False))
+
+    # Verifica se arquivos críticos foram gerados (necessários para calcular_ivs)
+    if not args.only and not args.skip_large:
+        voronoi = base_dir / "data" / "processed" / "territorios_voronoi_ubs.geojson"
+        if not voronoi.exists() or voronoi.stat().st_size == 0:
+            log.error("Voronoi ausente — abortando para retry: %s", voronoi)
+            sys.exit(1)
+
+        universo_dir = base_dir / "data" / "raw" / "ibge_universo"
+        critical = ["basico", "pessoa01", "alfabetizacao", "domicilio", "cor_raca"]
+        missing_critical = [
+            key for key in critical
+            if not any(universo_dir.glob(f"*{key}*"))
+        ]
+        if missing_critical:
+            log.error("Arquivos IBGE críticos ausentes: %s — abortando para retry", missing_critical)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
