@@ -51,6 +51,7 @@ VORONOI = PROC / "territorios_voronoi_ubs.geojson"
 OSC_FILE = RAW / "osc_municipio_osm.json"
 ESCOLA_FILE: Path | None = None  # set by _configure_runtime
 CNPJ_FILE: Path | None = None    # set by _configure_runtime (geocoded)
+CNEFE_FILE: Path | None = None   # set by _configure_runtime
 IVS_OUT_NAME = "ivs_municipio.csv"
 
 CRS_GEO = "EPSG:4674"
@@ -108,7 +109,7 @@ BAS_COLS   = ["CD_SETOR", "v0001"]
 
 
 def _configure_runtime(base_dir: Path, slug: str) -> None:
-    global BASE, RAW, PROC, IBGE_DIR, SETOR_GEO, VORONOI, OSC_FILE, ESCOLA_FILE, CNPJ_FILE, IVS_OUT_NAME
+    global BASE, RAW, PROC, IBGE_DIR, SETOR_GEO, VORONOI, OSC_FILE, ESCOLA_FILE, CNPJ_FILE, CNEFE_FILE, IVS_OUT_NAME
     BASE = base_dir.resolve()
     RAW = BASE / "data" / "raw"
     PROC = BASE / "data" / "processed"
@@ -119,6 +120,7 @@ def _configure_runtime(base_dir: Path, slug: str) -> None:
     OSC_FILE = RAW / f"osc_{slug}_osm.json"
     ESCOLA_FILE = RAW / "censo_escolar" / f"{slug}_escolas_geo.csv"
     CNPJ_FILE = RAW / "cnpj" / f"{slug}_cnpj_osc_geo.csv"
+    CNEFE_FILE = RAW / "cnefe" / f"{slug}_cnefe.csv"
     IVS_OUT_NAME = f"ivs_{slug}.csv"
 
 
@@ -291,16 +293,71 @@ def carregar_setores_com_dados() -> gpd.GeoDataFrame:
     return setores
 
 
+def _load_cnefe_fractions(
+    cnefe_path: Path,
+    territorios: gpd.GeoDataFrame,
+) -> pd.DataFrame | None:
+    """
+    Carrega endereços CNEFE e computa, para cada par (CD_SETOR, id_ubs),
+    a fração de endereços residenciais do setor que estão no território.
+
+    Retorna DataFrame com colunas [CD_SETOR, id_ubs, _cnefe_frac], ou None se indisponível.
+    Substitui a fração de área no `agregar_por_voronoi` por uma ponderação mais precisa
+    baseada em contagem real de domicílios.
+    """
+    if cnefe_path is None or not cnefe_path.exists():
+        return None
+    try:
+        df = pd.read_csv(cnefe_path, dtype=str)
+        df["LATITUDE"] = pd.to_numeric(df["LATITUDE"], errors="coerce")
+        df["LONGITUDE"] = pd.to_numeric(df["LONGITUDE"], errors="coerce")
+        df = df.dropna(subset=["LATITUDE", "LONGITUDE"])
+        if df.empty:
+            log.warning("  CNEFE: arquivo vazio ou sem coordenadas válidas")
+            return None
+
+        gdf = gpd.GeoDataFrame(
+            df[["COD_SETOR"]].copy(),
+            geometry=gpd.points_from_xy(df["LONGITUDE"], df["LATITUDE"]),
+            crs=CRS_GEO,
+        ).to_crs(CRS_UTM)
+
+        t_utm = territorios.to_crs(CRS_UTM)[["id_ubs", "geometry"]]
+        joined = gpd.sjoin(gdf, t_utm, how="left", predicate="within")
+        # CNEFE usa código de setor com sufixo de situação (ex: "431440705180052P")
+        # O shapefile IBGE usa código de 15 dígitos sem sufixo → truncar para 15 chars
+        joined["COD_SETOR"] = joined["COD_SETOR"].astype(str).str.strip().str[:15]
+
+        # Conta endereços por (setor, território)
+        counts = joined.groupby(["COD_SETOR", "id_ubs"]).size().reset_index(name="_cnt")
+        totals = joined.groupby("COD_SETOR").size().reset_index(name="_total")
+        counts = counts.merge(totals, on="COD_SETOR")
+        counts["_cnefe_frac"] = counts["_cnt"] / counts["_total"].clip(lower=1)
+
+        n_setores = counts["COD_SETOR"].nunique()
+        n_territorios = counts["id_ubs"].nunique()
+        log.info(
+            "  CNEFE: %d endereços → %d setores × %d territórios com pesos calculados",
+            len(df), n_setores, n_territorios,
+        )
+        return counts[["COD_SETOR", "id_ubs", "_cnefe_frac"]]
+    except Exception as e:
+        log.warning("  CNEFE: erro ao calcular pesos: %s — usando fração de área", e)
+        return None
+
+
 def agregar_por_voronoi(
     setores: gpd.GeoDataFrame,
     territorios: gpd.GeoDataFrame,
     colunas_soma: list[str],
+    cnefe_fracs: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Interseção ponderada por área: cada coluna do setor é distribuída
     proporcionalmente à fração de área que intersecta cada território Voronoi.
     """
-    log.info("Spatial join setores → territórios Voronoi (ponderado por área)...")
+    method = "CNEFE (endereços)" if cnefe_fracs is not None else "área"
+    log.info("Spatial join setores → territórios Voronoi (ponderado por %s)...", method)
     log.info("  %d setores × %d territórios — executando overlay (pode demorar)...",
              len(setores), len(territorios))
 
@@ -316,10 +373,24 @@ def agregar_por_voronoi(
     log.info("  overlay concluído em %.1fs — %d fragmentos", time.monotonic() - t0, len(inter))
     inter["_area_inter"] = inter.geometry.area
 
-    # Mapa área original do setor
+    # Fração de área (default / fallback)
     area_map = s_utm.set_index("CD_SETOR")["_area_setor"]
     inter["_area_orig"] = inter["CD_SETOR"].map(area_map)
     inter["_frac"] = (inter["_area_inter"] / inter["_area_orig"].clip(lower=1e-10)).clip(upper=1.0)
+
+    # Substituir por fração CNEFE quando disponível
+    if cnefe_fracs is not None:
+        inter = inter.merge(
+            cnefe_fracs.rename(columns={"COD_SETOR": "CD_SETOR"}),
+            on=["CD_SETOR", "id_ubs"],
+            how="left",
+        )
+        mask = inter["_cnefe_frac"].notna()
+        inter.loc[mask, "_frac"] = inter.loc[mask, "_cnefe_frac"]
+        log.info(
+            "  CNEFE: pesos aplicados a %d/%d fragmentos (%.0f%% cobertura)",
+            mask.sum(), len(inter), mask.mean() * 100,
+        )
 
     resultado: dict[str, pd.Series] = {}
     for col in _tqdm(colunas_soma, desc="  agregando colunas", leave=False, unit="col"):
@@ -589,9 +660,15 @@ def main():
     cols_presentes = [c for c in cols_numericas if c in setores.columns]
     log.info("  Colunas para agregar: %d/%d", len(cols_presentes), len(cols_numericas))
 
-    # 4. Spatial join ponderado
+    # 4. Spatial join ponderado (CNEFE quando disponível, área como fallback)
     territorios_com_id = territorios[["id_ubs", "no_ubs", "geometry"]].copy()
-    agg = agregar_por_voronoi(setores, territorios_com_id, cols_presentes)
+    cnefe_fracs = None
+    if CNEFE_FILE and CNEFE_FILE.exists() and CNEFE_FILE.stat().st_size > 0:
+        log.info("Carregando pesos CNEFE: %s", CNEFE_FILE.name)
+        cnefe_fracs = _load_cnefe_fractions(CNEFE_FILE, territorios_com_id)
+    else:
+        log.info("CNEFE não encontrado — usando fração de área para ponderação")
+    agg = agregar_por_voronoi(setores, territorios_com_id, cols_presentes, cnefe_fracs=cnefe_fracs)
 
     # 5. Calcular indicadores
     log.info("Calculando indicadores por UBS...")

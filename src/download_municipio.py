@@ -94,6 +94,7 @@ def _ensure_structure(base_dir: Path) -> None:
         base_dir / "data" / "raw" / "ibge_setores",
         base_dir / "data" / "raw" / "ibge_universo",
         base_dir / "data" / "raw" / "cnpj",
+        base_dir / "data" / "raw" / "cnefe",
         base_dir / "data" / "processed",
     ]
     for d in folders:
@@ -905,6 +906,12 @@ _CNPJ_COLS = [
 # CNAEs de interesse para capital social (D3): associações, assistência social, centros comunitários
 _CNPJ_OSC_CNAE_PREFIXES = ("9430", "9499", "8800", "8899", "9101", "9420", "9411", "9412")
 
+# URL base do CNEFE — Cadastro Nacional de Endereços para Fins Estatísticos (Censo 2022)
+_CNEFE_BASE = (
+    "https://ftp.ibge.gov.br/Cadastro_Nacional_de_Enderecos_para_Fins_Estatisticos/"
+    "Censo_Demografico_2022/Arquivos_CNEFE/CSV/Municipio/"
+)
+
 # URL dos arquivos CNPJ da Receita Federal.
 # Fonte/catálogo oficial: https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj
 # Os ZIPs ficam em: https://arquivos.receitafederal.gov.br/CNPJ/
@@ -1062,6 +1069,88 @@ def step_cnpj_osc(base_dir: Path, skip_large: bool = True) -> StatusRow:
 
 
 
+def step_cnefe(base_dir: Path) -> StatusRow:
+    """
+    Baixa o CSV do CNEFE (endereços geocodificados do Censo 2022) para o município.
+    Salva apenas colunas essenciais (COD_SETOR, LATITUDE, LONGITUDE) para uso como
+    pesos de agregação setor→território em vez da fração de área.
+    """
+    out_csv = base_dir / "data" / "raw" / "cnefe" / f"{SLUG}_cnefe.csv"
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    if out_csv.exists() and out_csv.stat().st_size > 0:
+        try:
+            n = sum(1 for _ in open(out_csv)) - 1
+            log.info("[ETAPA cnefe] arquivo existente (%d endereços)", n)
+            return StatusRow("CNEFE", _rel(base_dir, out_csv), "OK", n, "arquivo existente")
+        except Exception:
+            pass
+
+    uf_prefix = _UF_IBGE_PREFIX.get(UF.upper(), "")
+    if not uf_prefix:
+        return StatusRow("CNEFE", _rel(base_dir, out_csv), "MANUAL", 0,
+                         f"UF {UF} sem prefixo IBGE mapeado")
+
+    uf_dir_url = f"{_CNEFE_BASE}{uf_prefix}_{UF.upper()}/"
+    s = _session()
+
+    # Descobre o nome exato do ZIP listando o diretório da UF
+    zip_url: str | None = None
+    try:
+        r = s.get(uf_dir_url, timeout=30)
+        r.raise_for_status()
+        links = re.findall(r'href=["\']?([^"\'>\s]+\.zip)', r.text, flags=re.IGNORECASE)
+        for link in links:
+            fname = link.split("/")[-1]
+            if fname.startswith(MUNICIPIO_IBGE):
+                zip_url = uf_dir_url + fname if not link.startswith("http") else link
+                break
+    except Exception as e:
+        log.warning("  CNEFE: erro ao listar diretório UF: %s", e)
+
+    if not zip_url:
+        # Fallback: constrói URL com nome slugificado da cidade
+        city_up = unicodedata.normalize("NFKD", CIDADE.upper()).encode("ascii", "ignore").decode("ascii")
+        city_up = re.sub(r"[^A-Z0-9]+", "_", city_up).strip("_")
+        zip_url = f"{uf_dir_url}{MUNICIPIO_IBGE}_{city_up}.zip"
+
+    # Cache do ZIP compartilhado por município (não apaga entre runs)
+    cache_dir = Path(__file__).resolve().parents[1] / "data" / "_cache" / "cnefe"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    zip_dest = cache_dir / f"{MUNICIPIO_IBGE}_cnefe.zip"
+
+    try:
+        _download_with_tqdm(zip_url, zip_dest, session=s, timeout=300)
+    except Exception as e:
+        return StatusRow("CNEFE", _rel(base_dir, out_csv), "MANUAL", 0,
+                         f"download falhou ({zip_url}): {e}")
+
+    try:
+        with zipfile.ZipFile(zip_dest, "r") as zf:
+            csv_members = [n for n in zf.namelist() if n.upper().endswith(".CSV")]
+            if not csv_members:
+                return StatusRow("CNEFE", _rel(base_dir, out_csv), "MANUAL", 0, "ZIP sem CSV")
+            with zf.open(csv_members[0]) as src:
+                df = pd.read_csv(
+                    src, sep=";", dtype=str, encoding="latin-1", low_memory=False,
+                    usecols=["COD_SETOR", "LATITUDE", "LONGITUDE", "COD_ESPECIE"],
+                    on_bad_lines="skip",
+                )
+        # Apenas endereços residenciais (espécie 1=domicílio particular permanente, 2=improvisado)
+        df = df[df["COD_ESPECIE"].isin(["1", "2"])].copy()
+        df["LATITUDE"] = pd.to_numeric(df["LATITUDE"].str.replace(",", ".", regex=False), errors="coerce")
+        df["LONGITUDE"] = pd.to_numeric(df["LONGITUDE"].str.replace(",", ".", regex=False), errors="coerce")
+        df = df.dropna(subset=["LATITUDE", "LONGITUDE"])
+        df = df[["COD_SETOR", "LATITUDE", "LONGITUDE"]].copy()
+        df.to_csv(out_csv, index=False)
+        log.info("[ETAPA cnefe] %d endereços residenciais salvos em %s", len(df), _rel(base_dir, out_csv))
+        return StatusRow("CNEFE", _rel(base_dir, out_csv), "OK", len(df),
+                         f"fonte: {zip_url}")
+    except Exception as e:
+        return StatusRow("CNEFE", _rel(base_dir, out_csv), "MANUAL", 0,
+                         f"extração falhou: {e}")
+
+
 def write_status(base_dir: Path, rows: list[StatusRow]) -> Path:
     out = base_dir / "data" / "processed" / "status_downloads.csv"
     df = pd.DataFrame([asdict(r) for r in rows])
@@ -1078,10 +1167,11 @@ def run_pipeline(base_dir: Path, only: str | None = None, skip_large: bool = Fal
         "cnes": lambda: [step_cnes(base_dir)],
         "voronoi": lambda: [step_voronoi(base_dir)],
         "ibge": lambda: step_ibge(base_dir, skip_large=skip_large),
+        "cnefe": lambda: [step_cnefe(base_dir)],
         "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=skip_large)],
     }
 
-    run_order = ["cnes", "voronoi", "ibge", "cnpj_osc"]
+    run_order = ["cnes", "voronoi", "ibge", "cnefe", "cnpj_osc"]
     if only:
         run_order = [only]
 
@@ -1113,7 +1203,7 @@ def main() -> None:
     parser.add_argument("--slug", default=None, help="Slug para nomes de arquivo (ex.: betim)")
     parser.add_argument(
         "--only",
-        choices=["cnes", "voronoi", "ibge", "cnpj_osc"],
+        choices=["cnes", "voronoi", "ibge", "cnefe", "cnpj_osc"],
         default=None,
         help="Executa apenas uma etapa/fonte",
     )
