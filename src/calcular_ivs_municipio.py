@@ -660,14 +660,18 @@ def main():
     cols_presentes = [c for c in cols_numericas if c in setores.columns]
     log.info("  Colunas para agregar: %d/%d", len(cols_presentes), len(cols_numericas))
 
-    # 4. Spatial join ponderado (CNEFE quando disponível, área como fallback)
+    # 4. Spatial join ponderado (área como método padrão)
+    # CNEFE disponível no código mas desabilitado — correlação com ref. SMS-POA 2019
+    # praticamente idêntica à fração de área em municípios urbanos densos (Δr < 0.001).
+    # Para reativar: USE_CNEFE = True
+    USE_CNEFE = False
     territorios_com_id = territorios[["id_ubs", "no_ubs", "geometry"]].copy()
     cnefe_fracs = None
-    if CNEFE_FILE and CNEFE_FILE.exists() and CNEFE_FILE.stat().st_size > 0:
+    if USE_CNEFE and CNEFE_FILE and CNEFE_FILE.exists() and CNEFE_FILE.stat().st_size > 0:
         log.info("Carregando pesos CNEFE: %s", CNEFE_FILE.name)
         cnefe_fracs = _load_cnefe_fractions(CNEFE_FILE, territorios_com_id)
     else:
-        log.info("CNEFE não encontrado — usando fração de área para ponderação")
+        log.info("Usando fração de área para ponderação setor→território")
     agg = agregar_por_voronoi(setores, territorios_com_id, cols_presentes, cnefe_fracs=cnefe_fracs)
 
     # 5. Calcular indicadores
