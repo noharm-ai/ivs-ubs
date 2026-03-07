@@ -248,6 +248,7 @@ cd docs && python -m http.server 8000
 | Benefícios de transferência de renda | Portal da Transparência | Download automático (API) |
 | Matrículas escolares | INEP | Download automático |
 | Entidades comunitárias | OpenStreetMap (Overpass API) | Download automático |
+| Entidades comunitárias (OSC) — alternativa | [CNPJ / Receita Federal](https://dados.gov.br/dados/conjuntos-dados/cadastro-nacional-da-pessoa-juridica---cnpj) | Download automático (ZIPs em `arquivos.receitafederal.gov.br/CNPJ/`) |
 
 ---
 
