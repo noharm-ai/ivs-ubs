@@ -548,6 +548,10 @@ def main():
     geojson_path = PROC / "territorios_voronoi_ubs.geojson"
     geojson_str = geojson_path.read_text(encoding="utf-8")
 
+    if df.empty:
+        log.error("IVS vazio (0 UBSs com territórios) — verifique o Voronoi para este município.")
+        raise SystemExit(1)
+
     log.info("Calculando scores por dimensão e IVS...")
     dim_df = calcular_dimensoes(df)
     df = df.join(dim_df)

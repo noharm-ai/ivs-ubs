@@ -10,68 +10,14 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import requests
-from scipy.spatial import Voronoi
-from shapely.geometry import LineString, Polygon
-from shapely.ops import split, unary_union
+from shapely.geometry import LineString, MultiPoint, Point
+from shapely.ops import split, unary_union, voronoi_diagram
 
 log = logging.getLogger(__name__)
 
 CRS_GEO = "EPSG:4674"
 CRS_UTM_22S = "EPSG:32722"
 
-
-def _voronoi_finite_polygons_2d(vor: Voronoi, radius: float | None = None):
-    """
-    Reconstrói regiões infinitas em polígonos finitos.
-    Fonte da abordagem: recipe clássico de Voronoi 2D (SciPy docs/community).
-    """
-    if vor.points.shape[1] != 2:
-        raise ValueError("Voronoi requer pontos 2D")
-
-    new_regions = []
-    new_vertices = vor.vertices.tolist()
-    center = vor.points.mean(axis=0)
-    if radius is None:
-        radius = np.ptp(vor.points, axis=0).max() * 2
-
-    all_ridges = {}
-    for (p1, p2), (v1, v2) in zip(vor.ridge_points, vor.ridge_vertices):
-        all_ridges.setdefault(p1, []).append((p2, v1, v2))
-        all_ridges.setdefault(p2, []).append((p1, v1, v2))
-
-    for p1, region_idx in enumerate(vor.point_region):
-        vertices = vor.regions[region_idx]
-        if all(v >= 0 for v in vertices):
-            new_regions.append(vertices)
-            continue
-
-        ridges = all_ridges.get(p1, [])
-        new_region = [v for v in vertices if v >= 0]
-
-        for p2, v1, v2 in ridges:
-            if v2 < 0:
-                v1, v2 = v2, v1
-            if v1 >= 0:
-                continue
-
-            tangent = vor.points[p2] - vor.points[p1]
-            tangent /= np.linalg.norm(tangent)
-            normal = np.array([-tangent[1], tangent[0]])
-
-            midpoint = vor.points[[p1, p2]].mean(axis=0)
-            direction = np.sign(np.dot(midpoint - center, normal)) * normal
-            far_point = vor.vertices[v2] + direction * radius
-
-            new_vertices.append(far_point.tolist())
-            new_region.append(len(new_vertices) - 1)
-
-        vs = np.asarray([new_vertices[v] for v in new_region])
-        centroid = vs.mean(axis=0)
-        angles = np.arctan2(vs[:, 1] - centroid[1], vs[:, 0] - centroid[0])
-        new_region = [v for _, v in sorted(zip(angles, new_region))]
-        new_regions.append(new_region)
-
-    return new_regions, np.asarray(new_vertices)
 
 
 def _download_limite_municipal(municipio_ibge: str, dest: Path, timeout: int = 60) -> Path:
@@ -250,16 +196,19 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
             geoms = [limite_union, limite_union]
         polys = [geoms[i] if i < len(geoms) else None for i in range(2)]
     else:
-        vor = Voronoi(coords)
-        regions, vertices = _voronoi_finite_polygons_2d(vor)
+        mp = MultiPoint([Point(x, y) for x, y in coords])
+        vor_col = voronoi_diagram(mp, envelope=limite_union)
         polys = []
-        for region in regions:
-            try:
-                poly = Polygon(vertices[region])
-                clipped = poly.intersection(limite_union)
-                polys.append(clipped)
-            except Exception:  # noqa: BLE001
-                polys.append(None)
+        for geom in pontos.geometry:
+            matched = None
+            for region in vor_col.geoms:
+                if region.contains(geom):
+                    matched = region.intersection(limite_union)
+                    break
+            if matched is None:
+                closest = min(vor_col.geoms, key=lambda r: r.distance(geom))
+                matched = closest.intersection(limite_union)
+            polys.append(matched)
 
     gdf = gpd.GeoDataFrame(
         {
