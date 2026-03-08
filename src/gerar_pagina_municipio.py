@@ -229,7 +229,13 @@ def gerar_json(df: pd.DataFrame, geojson_str: str, slug: str, cidade: str,
     while docs_data.name != "data" and docs_data.parent != docs_data:
         docs_data = docs_data.parent
     gz_path_manifest = docs_data / "municipios.json.gz"
-    manifest: list[dict] = json.loads(gzip.decompress(gz_path_manifest.read_bytes())) if gz_path_manifest.exists() else []
+    manifest: list[dict] = []
+    if gz_path_manifest.exists():
+        try:
+            manifest = json.loads(gzip.decompress(gz_path_manifest.read_bytes()))
+        except (gzip.BadGzipFile, OSError, ValueError):
+            log.warning("Manifesto corrompido — recriando: %s", gz_path_manifest)
+            manifest = []
     uf_dir = uf.upper() if uf else "BR"
     entry = {
         "slug": slug, "nome": cidade, "uf": uf, "ibge": ibge,
