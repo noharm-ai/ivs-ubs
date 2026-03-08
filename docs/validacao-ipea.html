@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.ico">
+<title>Validação IPEA — IVS UBS NoHarm vs. Atlas IVS</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+       background: #f0f2f5; color: #2c3e50; font-size: 14px; }
+.site-nav{background:#0f3460;display:flex;gap:4px;padding:8px 16px;flex-wrap:wrap;align-items:center}
+.site-nav .nav-brand{color:#7fb3d3;font-size:.78em;font-weight:600;margin-right:8px;letter-spacing:.05em;text-transform:uppercase}
+.site-nav a{color:#b8d4f0;text-decoration:none;padding:5px 12px;border-radius:4px;font-size:.82em;font-weight:500;transition:background .15s;white-space:nowrap}
+.site-nav a:hover{background:rgba(255,255,255,.15);color:#fff}
+.site-nav a.active{background:rgba(255,255,255,.22);color:#fff;font-weight:700}
+.header { background: linear-gradient(135deg, #1a5276 0%, #2980b9 100%);
+           color: #fff; padding: 32px 40px; }
+.header h1 { font-size: 1.7em; margin-bottom: 6px; }
+.header p { opacity: .85; font-size: .95em; max-width: 800px; line-height: 1.6; }
+.container { max-width: 1100px; margin: 0 auto; padding: 28px 20px; }
+.section-title { font-size: 1.05em; font-weight: 700; color: #1a5276;
+                  border-left: 4px solid #2980b9; padding-left: 10px;
+                  margin: 36px 0 16px; text-transform: uppercase; letter-spacing: .04em; }
+.card { background: #fff; border-radius: 8px; padding: 24px 28px;
+         box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 20px; }
+.cards-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+.stat-card { background: #fff; border-radius: 8px; padding: 18px 22px;
+             box-shadow: 0 1px 4px rgba(0,0,0,.08); flex: 1; min-width: 160px; text-align: center; }
+.stat-value { font-size: 2em; font-weight: 700; color: #1a5276; line-height: 1.1; }
+.stat-label { font-size: .78em; color: #7f8c8d; text-transform: uppercase;
+              letter-spacing: .05em; margin-top: 4px; }
+.stat-sub { font-size: .82em; color: #555; margin-top: 2px; }
+table { width: 100%; border-collapse: collapse; font-size: .9em; }
+th { background: #1a5276; color: #fff; padding: 10px 14px; text-align: left;
+     font-weight: 600; font-size: .82em; text-transform: uppercase; letter-spacing: .04em; }
+td { padding: 9px 14px; border-bottom: 1px solid #eee; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #f8fafc; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 12px;
+         font-size: .78em; font-weight: 600; }
+.badge-forte    { background: #d4efdf; color: #1e8449; }
+.badge-moderada { background: #fdebd0; color: #d35400; }
+.badge-fraca    { background: #fadbd8; color: #c0392b; }
+.badge-muito-forte { background: #a9dfbf; color: #1a5e35; }
+.badge-negativa { background: #e8daef; color: #6c3483; }
+.variant-a { border-left: 4px solid #e74c3c; }
+.variant-b { border-left: 4px solid #27ae60; }
+.variant-c { border-left: 4px solid #f39c12; }
+.callout { background: #eaf4fb; border-left: 4px solid #2980b9; padding: 14px 18px;
+           border-radius: 0 6px 6px 0; margin: 16px 0; font-size: .92em; line-height: 1.6; }
+.callout strong { color: #1a5276; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+.dim-block { border-radius: 6px; padding: 14px 16px; margin-bottom: 10px; font-size: .88em; }
+.dim-ok  { background: #d4efdf; }
+.dim-warn{ background: #fdebd0; }
+.dim-bad { background: #fadbd8; }
+.dim-title { font-weight: 700; margin-bottom: 4px; }
+footer { text-align: center; padding: 28px; color: #aaa; font-size: .8em; margin-top: 20px; }
+footer a { color: #7fb3d3; text-decoration: none; }
+</style>
+</head>
+<body>
+
+<nav class="site-nav">
+  <span class="nav-brand">IVS UBS NoHarm</span>
+  <a href="index.html">🏠 Municípios</a>
+  <a href="comparacao-ivs-poa.html">📊 Validação POA</a>
+  <a href="validacao-ipea.html" class="active">📈 Validação IPEA</a>
+  <a href="caso-controle.html">🔬 Caso-Controle</a>
+</nav>
+
+<div class="header">
+  <h1>Validação — IVS UBS NoHarm vs. Atlas IVS IPEA</h1>
+  <p>Comparação entre o IVS UBS NoHarm (Censo 2022, por território de UBS) e o IVS do
+  Atlas da Vulnerabilidade Social do IPEA (Censo 2010, nível municipal).
+  Análise de correlação de Pearson e Spearman em 169 municípios processados.</p>
+</div>
+
+<div class="container">
+
+  <!-- Resumo estatístico -->
+  <div class="section-title">Resultado da correlação (169 municípios)</div>
+  <div class="cards-row">
+    <div class="stat-card variant-a" style="border-left:4px solid #e74c3c">
+      <div class="stat-value">0,20</div>
+      <div class="stat-label">Spearman ρ</div>
+      <div class="stat-sub">A) ivs_medio original</div>
+      <div class="stat-sub" style="margin-top:6px"><span class="badge badge-fraca">fraca ***</span></div>
+    </div>
+    <div class="stat-card variant-b" style="border-left:4px solid #27ae60">
+      <div class="stat-value">0,79</div>
+      <div class="stat-label">Spearman ρ</div>
+      <div class="stat-sub">B) normalização global</div>
+      <div class="stat-sub" style="margin-top:6px"><span class="badge badge-forte">forte ***</span></div>
+    </div>
+    <div class="stat-card variant-c" style="border-left:4px solid #f39c12">
+      <div class="stat-value">0,55</div>
+      <div class="stat-label">Spearman ρ</div>
+      <div class="stat-sub">C) 3 dimensões IPEA</div>
+      <div class="stat-sub" style="margin-top:6px"><span class="badge badge-moderada">moderada ***</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">0,88</div>
+      <div class="stat-label">Spearman ρ</div>
+      <div class="stat-sub">Capital Humano nosso × IPEA</div>
+      <div class="stat-sub" style="margin-top:6px"><span class="badge badge-muito-forte">muito forte ***</span></div>
+    </div>
+  </div>
+
+  <!-- Três variantes -->
+  <div class="section-title">As três variantes testadas</div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Variante</th>
+          <th>Normalização</th>
+          <th>Pesos</th>
+          <th>Pearson r</th>
+          <th>Spearman ρ</th>
+          <th>Interpretação</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>A)</strong> <code>ivs_medio</code> original</td>
+          <td>Por município (min-max local)</td>
+          <td>SMS-POA: D1×50% + D2×30% + D3×10% + D4×8% + D5×2%</td>
+          <td>+0,256</td>
+          <td>+0,204</td>
+          <td><span class="badge badge-fraca">fraca ***</span></td>
+        </tr>
+        <tr>
+          <td><strong>B)</strong> <code>ivs_global_sms</code></td>
+          <td>Global (todos os municípios juntos)</td>
+          <td>SMS-POA (mesmos pesos de A)</td>
+          <td>+0,757</td>
+          <td>+0,786</td>
+          <td><span class="badge badge-forte">forte ***</span></td>
+        </tr>
+        <tr>
+          <td><strong>C)</strong> <code>ivs_global_ipea</code></td>
+          <td>Global</td>
+          <td>3 dimensões iguais (1/3 cada): Infra + CapHum + Social</td>
+          <td>+0,552</td>
+          <td>+0,548</td>
+          <td><span class="badge badge-moderada">moderada ***</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout">
+    <strong>Diagnóstico principal:</strong> A variante B usa <em>exatamente os mesmos pesos</em> que
+    A, mudando apenas a normalização de local (por município) para global (todos os municípios juntos).
+    A correlação salta de ρ=0,20 para ρ=0,79. Isso mostra que a normalização por município apaga a
+    variação absoluta entre municípios — o <code>ivs_medio</code> fica comprimido em 0,33–0,65
+    (dp=0,06), enquanto o IVS IPEA varia de 0,14 a 0,77 (dp=0,13).
+  </div>
+
+  <!-- Correlação por dimensão -->
+  <div class="section-title">Correlação por dimensão (normalização global)</div>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>Nossa dimensão (global)</th>
+          <th>Dimensão equivalente IPEA</th>
+          <th>Pearson r</th>
+          <th>Spearman ρ</th>
+          <th>Interpretação</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Infra (sem_saneam + sem_lixo)</td>
+          <td>Infraestrutura Urbana</td>
+          <td>+0,344</td>
+          <td>+0,330</td>
+          <td><span class="badge badge-fraca">fraca ***</span></td>
+        </tr>
+        <tr>
+          <td>CapHum (analf + escola + adol_fem)</td>
+          <td>Capital Humano</td>
+          <td>+0,868</td>
+          <td>+0,882</td>
+          <td><span class="badge badge-muito-forte">muito forte ***</span></td>
+        </tr>
+        <tr>
+          <td>Social (OSC + idosos)</td>
+          <td>Renda e Trabalho</td>
+          <td>−0,415</td>
+          <td>−0,400</td>
+          <td><span class="badge badge-negativa">fraca negativa ***</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Diferenças estruturais -->
+  <div class="section-title">Diferenças estruturais</div>
+  <div class="two-col">
+    <div class="card">
+      <p style="font-weight:700;margin-bottom:12px;color:#1a5276">IVS UBS NoHarm</p>
+      <table>
+        <tr><td style="color:#888;width:40%">Dados</td><td><strong>Censo 2022</strong></td></tr>
+        <tr><td style="color:#888">Escala</td><td>Por território de UBS</td></tr>
+        <tr><td style="color:#888">Dimensões</td><td>5 (D1–D5)</td></tr>
+        <tr><td style="color:#888">Pesos</td><td>D1=50%, D2=30%, D3=10%, D4=8%, D5=2%</td></tr>
+        <tr><td style="color:#888">Normalização</td><td>Min-max por município</td></tr>
+        <tr><td style="color:#888">Renda</td><td>❌ não disponível</td></tr>
+        <tr><td style="color:#888">Raça</td><td>✅ D1_negros</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <p style="font-weight:700;margin-bottom:12px;color:#1a5276">IVS IPEA — Atlas</p>
+      <table>
+        <tr><td style="color:#888;width:40%">Dados</td><td><strong>Censo 2010</strong></td></tr>
+        <tr><td style="color:#888">Escala</td><td>Municipal (e UDH)</td></tr>
+        <tr><td style="color:#888">Dimensões</td><td>3 (Infra / CapHum / Renda)</td></tr>
+        <tr><td style="color:#888">Pesos</td><td>1/3 cada dimensão</td></tr>
+        <tr><td style="color:#888">Normalização</td><td>Nacional</td></tr>
+        <tr><td style="color:#888">Renda</td><td>✅ Renda e Trabalho (1/3 do IVS)</td></tr>
+        <tr><td style="color:#888">Raça</td><td>❌ ausente</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- Dimensão por dimensão -->
+  <div class="section-title">O que temos vs. o que falta</div>
+  <div class="two-col">
+    <div>
+      <div class="dim-block dim-ok">
+        <div class="dim-title">✅ Capital Humano — muito bem coberto (ρ=0,88)</div>
+        Analfabetismo, evasão escolar 0–5 e 6–14, proporção de adolescentes femininas.
+        Indicadores do Censo 2022 setorial capturam bem essa dimensão.
+      </div>
+      <div class="dim-block dim-warn">
+        <div class="dim-title">⚠️ Infraestrutura — parcialmente coberto (ρ=0,33)</div>
+        Temos saneamento e coleta de lixo. O IPEA inclui também mobilidade urbana
+        (% com renda ≤ ½SM e deslocamento ao trabalho &gt;1h), que não está disponível
+        no Censo 2022 setorial.
+      </div>
+      <div class="dim-block dim-bad">
+        <div class="dim-title">❌ Renda e Trabalho — ausente (ρ=−0,40)</div>
+        Nossa proxy "Social" (OSC + idosos) correlaciona <em>negativamente</em> com a
+        dimensão de Renda do IPEA — municípios mais ricos têm mais OSCs. Precisamos de
+        indicadores de renda para cobrir essa dimensão.
+      </div>
+    </div>
+    <div class="card">
+      <p style="font-weight:700;margin-bottom:14px;color:#1a5276">Próximos passos para melhorar a correlação</p>
+      <p style="margin-bottom:10px;line-height:1.6">
+        <strong>1. Indicador de renda</strong> — maior impacto esperado.<br>
+        <em>Opções:</em> PBF por CEP (Portal da Transparência API) ou variáveis de
+        renda do Censo 2022 setorial (arquivo <code>domicilio3</code>, variáveis
+        V00496–V00643, aguardando identificação no dicionário IBGE).
+      </p>
+      <p style="margin-bottom:10px;line-height:1.6">
+        <strong>2. Normalização global</strong> — já testada e funciona.<br>
+        Mudança simples: normalizar os indicadores no conjunto de todos os municípios
+        processados em vez de por município. Com os pesos atuais, a correlação já
+        atinge ρ=0,79.
+      </p>
+      <p style="line-height:1.6">
+        <strong>3. Cobertura ESF</strong> — requer e-Gestor APS por CNES.<br>
+        Substituiria OSC como proxy de acesso a serviços.
+      </p>
+    </div>
+  </div>
+
+  <!-- Nota metodológica -->
+  <div class="section-title">Nota metodológica</div>
+  <div class="callout">
+    <strong>Por que mantemos a normalização por município no pipeline principal?</strong><br>
+    A normalização por município faz o IVS mostrar <em>vulnerabilidade relativa dentro de cada cidade</em>,
+    identificando quais UBSs o gestor municipal deve priorizar. Isso é útil operacionalmente.
+    A normalização global (variante B) é mais indicada para <em>comparações entre municípios</em>
+    e está disponível via <code>python src/comparar_ivs_ipea.py</code>.
+  </div>
+
+  <div class="card" style="margin-top:20px;font-size:.88em;color:#555;line-height:1.7">
+    <strong>Fonte:</strong> Atlas da Vulnerabilidade Social — IPEA.
+    Dados municipais 2010 (nível <em>regiao,uf,rm,municipio</em>, Total Cor × Total Sexo × Total Situação de Domicílio).<br>
+    <strong>Script:</strong> <code>src/comparar_ivs_ipea.py</code> —
+    testa três variantes e salva CSV em <code>data/reference/ivs_comparacao_ipea_2010.csv</code>.<br>
+    <strong>N:</strong> 169 municípios (batch parcial em 08/03/2026).
+  </div>
+
+</div>
+
+<footer>
+  IVS UBS NoHarm · <a href="https://github.com/noharm-ai/ivs-ubs">github.com/noharm-ai/ivs-ubs</a>
+</footer>
+
+</body>
+</html>
