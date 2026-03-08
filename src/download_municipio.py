@@ -1171,7 +1171,7 @@ def run_pipeline(base_dir: Path, only: str | None = None, skip_large: bool = Fal
         "cnpj_osc": lambda: [step_cnpj_osc(base_dir, skip_large=skip_large)],
     }
 
-    run_order = ["cnes", "voronoi", "ibge", "cnefe", "cnpj_osc"]
+    run_order = ["cnes", "voronoi", "ibge", "cnpj_osc"]  # cnefe desabilitado (USE_CNEFE=False)
     if only:
         run_order = [only]
 
