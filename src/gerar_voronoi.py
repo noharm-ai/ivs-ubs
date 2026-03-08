@@ -140,10 +140,8 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
     df = df.dropna(subset=["latitude", "longitude"]).copy()
     df = df.drop_duplicates(subset=["cnes"])
 
-    if len(df) < 2:
-        raise ValueError(
-            f"Pontos com coordenadas insuficientes para Voronoi: {len(df)} (mínimo 2)."
-        )
+    if len(df) < 1:
+        raise ValueError(f"Nenhum ponto CNES com coordenadas válidas encontrado.")
 
     pontos = gpd.GeoDataFrame(
         df,
@@ -162,6 +160,23 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
         # Mantém o pipeline executável em ambientes sem rede/limite municipal.
         log.warning("Limite municipal indisponível (%s). Usando convex hull das UBS.", e)
         limite_union = unary_union(pontos.geometry).convex_hull.buffer(5_000)
+
+    # Caso especial: 1 UBS → município inteiro é o território
+    if len(df) == 1:
+        log.info("Apenas 1 UBS — território = município inteiro.")
+        gdf = gpd.GeoDataFrame(
+            {"cnes": pontos["cnes"].values, "nome": pontos["nome"].values},
+            geometry=[limite_union],
+            crs=CRS_UTM_22S,
+        ).to_crs(CRS_GEO)
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        gdf.to_file(out_file, driver="GeoJSON")
+        return {
+            "arquivo": out_file,
+            "n_poligonos": 1,
+            "n_pontos_entrada": 1,
+            "cobertura_area": 1.0,
+        }
 
     coords = np.array([(geom.x, geom.y) for geom in pontos.geometry])
 
