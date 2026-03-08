@@ -219,6 +219,21 @@ def generate_voronoi(base_dir: Path, municipio_ibge: str = "4314407", slug: str 
 
     coords = np.array([(geom.x, geom.y) for geom in pontos.geometry])
 
+    # Jitter pontos com coordenadas idênticas (~1 m) para evitar erro qhull QH6154
+    rng = np.random.default_rng(seed=42)
+    seen: dict[tuple, int] = {}
+    for i, (x, y) in enumerate(coords):
+        key = (round(x, 1), round(y, 1))
+        count = seen.get(key, 0)
+        if count > 0:
+            angle = rng.uniform(0, 2 * np.pi)
+            coords[i] += np.array([np.cos(angle), np.sin(angle)]) * (count * 2.0)
+            log.warning(
+                "UBS '%s' tem coordenadas duplicadas — aplicando jitter de %dm",
+                pontos.iloc[i]["nome"], count * 2,
+            )
+        seen[key] = count + 1
+
     if len(coords) == 2:
         # Caso especial: 2 UBS → dividir pelo bisector perpendicular
         p1, p2 = coords[0], coords[1]
