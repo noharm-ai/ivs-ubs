@@ -1,4 +1,4 @@
-# IVSaúde — Índice de Vulnerabilidade em Saúde
+# IVS UBS NoHarm — Índice de Vulnerabilidade em Saúde
 
 Metodologia para cálculo do **Índice de Vulnerabilidade em Saúde (IVS)** por
 território de UBS, com base em Determinantes Sociais da Saúde e dados públicos.

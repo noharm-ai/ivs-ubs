@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="favicon.ico">
-<title>IVSaúde</title>
+<title>IVS UBS NoHarm</title>
 <meta name="description" content="Índice de Vulnerabilidade em Saúde por território de UBS">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -55,7 +55,7 @@ footer a{color:#2980b9;text-decoration:none}
 <body>
 
 <nav class="site-nav">
-  <span class="nav-brand">IVSaúde</span>
+  <span class="nav-brand">IVS UBS NoHarm</span>
   <a href="index.html">&#8592; Municípios</a>
   <span class="nav-current" id="nav-current"></span>
 </nav>
@@ -127,11 +127,11 @@ function renderPage(meta, geojson, tabela) {
   const n = m.n_indicadores || 12;
 
   document.getElementById('nav-current').textContent = `🗺 ${m.nome}`;
-  document.title = `IVSaúde ${m.nome}`;
+  document.title = `IVS UBS NoHarm ${m.nome}`;
 
   document.getElementById('app').innerHTML = `
 <div class="hero">
-  <h1>IVSaúde ${m.nome}</h1>
+  <h1>IVS UBS NoHarm ${m.nome}</h1>
   <p>Índice de Vulnerabilidade em Saúde dos Territórios das Unidades Básicas de Saúde</p>
   <p class="sub">Dados IBGE Censo ${m.ano_censo} · Metodologia Determinantes Sociais da Saúde (Dahlgren &amp; Whitehead, 1991)</p>
   <div class="badges">
@@ -216,7 +216,7 @@ function renderPage(meta, geojson, tabela) {
 </div>
 
 <footer>
-  IVSaúde ${m.nome} · <a href="https://github.com/noharm-ai/ivs-ubs">github.com/noharm-ai/ivs-ubs</a>
+  IVS UBS NoHarm ${m.nome} · <a href="https://github.com/noharm-ai/ivs-ubs">github.com/noharm-ai/ivs-ubs</a>
   · IBGE Censo ${m.ano_censo} · Pipeline open-source
 </footer>`;
 

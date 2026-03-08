@@ -1,4 +1,4 @@
-# Análise de correlação — IVSaúde vs. IVS IPEA
+# Análise de correlação — IVS UBS NoHarm vs. IVS IPEA
 
 ## Fonte de referência
 
@@ -23,9 +23,9 @@ média simples de 3 dimensões com peso 1/3 cada:
 
 ---
 
-## Diferenças estruturais em relação ao IVSaúde
+## Diferenças estruturais em relação ao IVS UBS NoHarm
 
-| Aspecto | IVSaúde (nosso) | IVS IPEA |
+| Aspecto | IVS UBS NoHarm (nosso) | IVS IPEA |
 |---|---|---|
 | Dados | Censo 2022 | Censo 2010 |
 | Dimensões | 5 (D1–D5) | 3 |
