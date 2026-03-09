@@ -184,6 +184,7 @@ function renderRegioes(ufsComDados) {
   container.querySelectorAll('.uf-btn:not(.disabled)').forEach(btn => {
     btn.addEventListener('click', () => {
       ufSelecionada = ufSelecionada === btn.dataset.uf ? null : btn.dataset.uf;
+      mostrarTodosUF = false;
       document.getElementById('busca').value = '';
       renderRegioes(ufsComDados);
       renderMunicipios();
@@ -191,17 +192,25 @@ function renderRegioes(ufsComDados) {
   });
 }
 
+let mostrarTodosUF = false;
+
 function renderMunicipios() {
   const container = document.getElementById('muni-container');
   const info = document.getElementById('resultado-info');
   const busca = document.getElementById('busca').value.trim().toLowerCase();
 
   let lista = allMunicipios;
+  let limitado = false;
 
   if (busca.length >= 2) {
     lista = lista.filter(m => m.nome.toLowerCase().includes(busca) || (m.uf||'').toLowerCase() === busca);
   } else if (ufSelecionada) {
     lista = lista.filter(m => m.uf === ufSelecionada);
+    lista = [...lista].sort((a, b) => b.n_ubs - a.n_ubs);
+    if (!mostrarTodosUF && lista.length > 10) {
+      limitado = true;
+      lista = lista.slice(0, 10);
+    }
   } else {
     // Sem filtro: não renderiza tudo de uma vez
     info.textContent = `${allMunicipios.length} municípios disponíveis — selecione um estado ou busque pelo nome.`;
@@ -215,8 +224,27 @@ function renderMunicipios() {
     return;
   }
 
-  info.textContent = `${lista.length} município${lista.length > 1 ? 's' : ''}`;
-  container.innerHTML = `<div class="muni-grid">${lista.map(renderCard).join('')}</div>`;
+  const total = ufSelecionada ? allMunicipios.filter(m => m.uf === ufSelecionada).length : lista.length;
+  info.textContent = limitado
+    ? `Mostrando 10 de ${total} município${total > 1 ? 's' : ''} (ordenados por nº de UBS)`
+    : `${total} município${total > 1 ? 's' : ''}`;
+
+  const verTodosBtn = limitado
+    ? `<div style="text-align:center;margin-top:8px">
+         <button id="btn-ver-todos" style="background:none;border:1px solid #2980b9;color:#2980b9;padding:8px 22px;border-radius:6px;cursor:pointer;font-size:.9em">
+           Ver todos os ${total} municípios de ${ufSelecionada}
+         </button>
+       </div>`
+    : '';
+
+  container.innerHTML = `<div class="muni-grid">${lista.map(renderCard).join('')}</div>${verTodosBtn}`;
+
+  if (limitado) {
+    document.getElementById('btn-ver-todos').addEventListener('click', () => {
+      mostrarTodosUF = true;
+      renderMunicipios();
+    });
+  }
 }
 
 async function fetchJson(url) {
@@ -247,6 +275,7 @@ async function init() {
     const busca = document.getElementById('busca').value.trim();
     if (busca.length >= 2) {
       ufSelecionada = null;
+      mostrarTodosUF = false;
       renderRegioes(ufsComDados);
     }
     renderMunicipios();
